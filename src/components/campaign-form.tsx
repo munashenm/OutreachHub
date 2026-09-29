@@ -10,7 +10,8 @@ export type CampaignFormValues = {
   name: string;
   description: string;
   status: CampaignStatus;
-  senderAccount: string;
+  mailboxId: string;
+  templateId: string;
   dailyLimit: string;
   timezone: string;
   sendingStartTime: string;
@@ -21,10 +22,14 @@ export function CampaignForm({
   mode,
   id,
   initial,
+  mailboxes,
+  templates,
 }: {
   mode: "create" | "edit";
   id?: string;
   initial?: Partial<CampaignFormValues>;
+  mailboxes: { id: string; email: string; provider: "GOOGLE" | "MICROSOFT" }[];
+  templates: { id: string; name: string }[];
 }) {
   const action = mode === "create" ? createCampaignAction : updateCampaignAction;
   const [state, formAction, pending] = useActionState(action, initialActionState);
@@ -32,7 +37,8 @@ export function CampaignForm({
     name: "",
     description: "",
     status: "DRAFT",
-    senderAccount: "",
+    mailboxId: "",
+    templateId: "",
     dailyLimit: "50",
     timezone: "UTC",
     sendingStartTime: "08:00",
@@ -60,8 +66,19 @@ export function CampaignForm({
           <textarea id="description" name="description" defaultValue={values.description} className={textAreaClass} />
         </Field>
       </div>
-      <Field label="Sender account" name="senderAccount" error={state.fieldErrors?.senderAccount}>
-        <input id="senderAccount" name="senderAccount" defaultValue={values.senderAccount} placeholder="name@company.com" className={inputClass} />
+      <Field label="Mailbox" name="mailboxId" error={state.fieldErrors?.mailboxId}>
+        <select id="mailboxId" name="mailboxId" defaultValue={values.mailboxId} className={inputClass}>
+          <option value="">No mailbox</option>
+          {mailboxes.map((mailbox) => (
+            <option key={mailbox.id} value={mailbox.id}>{mailbox.email} · {mailbox.provider === "MICROSOFT" ? "Microsoft 365" : "Gmail"}</option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Template" name="templateId" error={state.fieldErrors?.templateId}>
+        <select id="templateId" name="templateId" defaultValue={values.templateId} className={inputClass}>
+          <option value="">No template</option>
+          {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+        </select>
       </Field>
       <Field label="Daily limit" name="dailyLimit" error={state.fieldErrors?.dailyLimit}>
         <input id="dailyLimit" name="dailyLimit" type="number" min={1} max={1000} defaultValue={values.dailyLimit} className={inputClass} />
@@ -77,7 +94,7 @@ export function CampaignForm({
           <input id="sendingEndTime" name="sendingEndTime" defaultValue={values.sendingEndTime} className={inputClass} />
         </Field>
       </div>
-      <p className="text-sm text-muted md:col-span-2">Saving an active campaign does not send email. Sending is not part of this release.</p>
+      <p className="text-sm text-muted md:col-span-2">An active campaign sends during its window, up to the daily limit. Opted-out, blocked, bounced, and suppressed addresses are skipped.</p>
       <div>
         <button className={buttonPrimary} disabled={pending}>{pending ? "Saving..." : mode === "create" ? "Create campaign" : "Save campaign"}</button>
       </div>

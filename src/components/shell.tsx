@@ -188,6 +188,7 @@ function NavIconSvg({ name }: { name: NavIcon }) {
     companies: "M3 21h18M5 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16M15 21V9h4a2 2 0 0 1 2 2v10",
     campaigns: "M4 6h16M4 12h10M4 18h7",
     inbox: "M3 12 5 5h14l2 7v7H3zM3 12h5l1 2h6l1-2h5",
+    rfqs: "M6 3h9l5 5v13H6zM9 13h6M9 17h4",
     pipeline: "M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v6h-4z",
     templates: "M6 3h9l5 5v13H6zM15 3v5h5",
     tasks: "M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01",

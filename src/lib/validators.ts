@@ -143,7 +143,8 @@ export const campaignSchema = z
     name: requiredText(120, "Campaign name"),
     description: optionalText(2000),
     status: z.enum(CAMPAIGN_STATUSES),
-    senderAccount: optionalEmail,
+    mailboxId: z.string().trim().transform((value) => (value.length === 0 ? null : value)),
+    templateId: z.string().trim().transform((value) => (value.length === 0 ? null : value)),
     dailyLimit: z.coerce.number().int().min(1, "Daily limit must be at least 1.").max(1000),
     timezone: z
       .string()
@@ -162,7 +163,49 @@ export const campaignSchema = z
         path: ["sendingEndTime"],
       });
     }
+    if (value.status === "ACTIVE" && !value.mailboxId) {
+      context.addIssue({
+        code: "custom",
+        message: "Choose a connected Gmail mailbox before activating.",
+        path: ["mailboxId"],
+      });
+    }
+    if (value.status === "ACTIVE" && !value.templateId) {
+      context.addIssue({
+        code: "custom",
+        message: "Choose a template before activating.",
+        path: ["templateId"],
+      });
+    }
   });
+
+export const draftSchema = z.object({
+  brief: requiredText(1000, "Brief"),
+  name: z.string().trim().max(120).optional().default(""),
+  subject: z.string().trim().max(200).optional().default(""),
+  body: z.string().trim().max(10000).optional().default(""),
+});
+
+export const templateSchema = z.object({
+  name: requiredText(120, "Template name"),
+  subject: requiredText(200, "Subject"),
+  body: requiredText(10000, "Message"),
+  htmlBody: z.string().trim().max(20000).optional().default(""),
+});
+
+export const replySchema = z.object({
+  messageId: z.string().trim().min(1),
+  to: emailField,
+  cc: z.string().trim().max(500).optional().default(""),
+  subject: requiredText(200, "Subject"),
+  body: requiredText(10000, "Message"),
+});
+
+export const rfqUpdateSchema = z.object({
+  id: z.string().trim().min(1),
+  status: z.enum(["NEW", "REVIEWING", "NEEDS_INFORMATION", "READY_TO_QUOTE", "QUOTE_PREPARED", "QUOTE_SENT", "WON", "LOST"]),
+  notes: z.string().trim().max(10000).optional().default(""),
+});
 
 export const suppressionSchema = z.object({
   email: emailField,
@@ -179,6 +222,7 @@ export const idListSchema = z
 export type ProspectInput = z.infer<typeof prospectSchema>;
 export type CompanyInput = z.infer<typeof companySchema>;
 export type CampaignInput = z.infer<typeof campaignSchema>;
+export type TemplateInput = z.infer<typeof templateSchema>;
 export type SuppressionInput = z.infer<typeof suppressionSchema>;
 
 export function fieldErrors(error: z.ZodError): Record<string, string> {

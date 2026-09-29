@@ -12,7 +12,10 @@ export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const token = request.cookies.get(COOKIE_NAME)?.value;
   const session = token ? await readSessionToken(token) : null;
-  const isPublic = PUBLIC_PATHS.has(pathname);
+  const isPublic = PUBLIC_PATHS.has(pathname)
+    || pathname.startsWith("/api/cron/")
+    || pathname.startsWith("/unsubscribe")
+    || pathname.startsWith("/api/unsubscribe");
 
   if (!session && !isPublic && pathname !== "/") {
     const url = request.nextUrl.clone();

@@ -17,13 +17,14 @@ export default async function DashboardPage() {
         description={session.workspace.isDemo ? "This workspace is marked as demo data." : "Live counts from this workspace. No sample metrics are invented."}
       />
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Total prospects" value={data.totalProspects} hint="People stored in this workspace." />
-        <StatCard label="Active campaigns" value={data.activeCampaigns} hint="Campaigns with status Active." />
-        <StatCard label="Emails sent" value={data.emailsSent} hint="Outbound messages recorded. Sending is not enabled yet." />
-        <StatCard label="Replies" value={data.replies} hint="Inbound messages recorded. Inbox sync is not enabled yet." />
-        <StatCard label="Interested leads" value={data.interestedLeads} hint="Qualified, quoting, negotiating, or won." />
+        <StatCard label="New enquiries" value={data.newEnquiries} hint="Inbound mail still uncategorised or marked as a new enquiry." />
+        <StatCard label="RFQs awaiting review" value={data.rfqsAwaitingReview} hint="RFQs at New or Reviewing." />
+        <StatCard label="Replies today" value={data.repliesToday} hint="Inbound messages since midnight in Johannesburg." />
+        <StatCard label="Campaign emails sent today" value={data.campaignSentToday} hint="Promotional sends since midnight in Johannesburg." />
+        <StatCard label="Interested or responded" value={data.respondedLeads} hint="Responded, qualified, quoting, negotiating, or won." />
         <StatCard label="Quotes requested" value={data.quotesRequested} hint="Prospects currently at quote requested." />
-        <StatCard label="Won opportunities" value={data.wonOpportunities} hint="Prospects currently marked won." />
+        <StatCard label="Active campaigns" value={data.activeCampaigns} hint="Campaigns with status Active." />
+        <StatCard label="Mailbox" value={data.mailbox ? 1 : 0} hint={data.mailbox ? `${data.mailbox.email} · ${data.mailbox.connectionStatus}${data.mailbox.lastError ? ` · ${data.mailbox.lastError}` : ""}` : "No Google mailbox connected."} />
       </div>
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <Panel className="p-5">
@@ -43,7 +44,7 @@ export default async function DashboardPage() {
         </Panel>
         <Panel className="p-5">
           <h2 className="text-base font-semibold">Campaign performance</h2>
-          <p className="mt-1 text-xs text-muted">Prospect membership only. Open and reply rates are not shown because email sending is not enabled.</p>
+          <p className="mt-1 text-xs text-muted">Prospect membership. Sent and reply counts live on the dashboard cards.</p>
           {data.campaigns.length === 0 ? (
             <p className="mt-4 text-sm text-muted">No campaigns yet.</p>
           ) : (
@@ -51,7 +52,7 @@ export default async function DashboardPage() {
               {data.campaigns.map((campaign) => (
                 <li key={campaign.id} className="flex items-center justify-between py-3 text-sm">
                   <Link href={`/campaigns/${campaign.id}`} className="font-medium hover:underline">{campaign.name}</Link>
-                  <span className="text-muted">{CAMPAIGN_STATUS_LABELS[campaign.status]} · {campaign._count.prospects} prospects</span>
+                  <span className="text-muted">{CAMPAIGN_STATUS_LABELS[campaign.status]} · {campaign._count.prospects} prospects · {data.deliveryByCampaign[campaign.id]?.sent ?? 0} sent · {data.deliveryByCampaign[campaign.id]?.replies ?? 0} replies</span>
                 </li>
               ))}
             </ul>

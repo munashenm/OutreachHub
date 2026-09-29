@@ -3,6 +3,7 @@ export type ActionState = {
   success?: string;
   fieldErrors?: Record<string, string>;
   devResetUrl?: string;
+  draft?: { subject: string; body: string };
 };
 
 export const initialActionState: ActionState = {};

@@ -64,6 +64,11 @@ export const CAMPAIGN_STATUS_LABELS: Record<CampaignStatus, string> = {
   ARCHIVED: "Archived",
 };
 
+export const MAILBOX_PROVIDER_LABELS = {
+  GOOGLE: "Gmail",
+  MICROSOFT: "Microsoft 365",
+} as const;
+
 export const ACTIVITY_LABELS = {
   PROSPECT_CREATED: "Prospect created",
   PROSPECT_EDITED: "Prospect edited",
@@ -78,7 +83,64 @@ export const ACTIVITY_LABELS = {
   LEAD_STATUS_CHANGED: "Lead status changed",
   SUPPRESSION_ADDED: "Suppression added",
   SUPPRESSION_REMOVED: "Suppression removed",
+  EMAIL_SENT: "Email sent",
+  EMAIL_FAILED: "Email failed",
+  REPLY_RECEIVED: "Reply received",
+  TEMPLATE_CREATED: "Template created",
+  TEMPLATE_UPDATED: "Template updated",
+  MAILBOX_CONNECTED: "Mailbox connected",
+  MAILBOX_DISCONNECTED: "Mailbox disconnected",
+  RFQ_CREATED: "RFQ created",
+  INBOX_UPDATED: "Inbox updated",
 } as const;
+
+export const INBOX_CATEGORIES = [
+  "NEW_ENQUIRY",
+  "RFQ",
+  "PRICING_REQUEST",
+  "PRODUCT_ENQUIRY",
+  "ORDER_ENQUIRY",
+  "SUPPORT",
+  "CAMPAIGN_REPLY",
+  "OTHER",
+] as const;
+
+export type InboxCategory = (typeof INBOX_CATEGORIES)[number];
+
+export const INBOX_CATEGORY_LABELS: Record<InboxCategory, string> = {
+  NEW_ENQUIRY: "New enquiry",
+  RFQ: "RFQ",
+  PRICING_REQUEST: "Pricing request",
+  PRODUCT_ENQUIRY: "Product enquiry",
+  ORDER_ENQUIRY: "Order enquiry",
+  SUPPORT: "Support",
+  CAMPAIGN_REPLY: "Campaign reply",
+  OTHER: "Other",
+};
+
+export const RFQ_STATUSES = [
+  "NEW",
+  "REVIEWING",
+  "NEEDS_INFORMATION",
+  "READY_TO_QUOTE",
+  "QUOTE_PREPARED",
+  "QUOTE_SENT",
+  "WON",
+  "LOST",
+] as const;
+
+export type RfqStatus = (typeof RFQ_STATUSES)[number];
+
+export const RFQ_STATUS_LABELS: Record<RfqStatus, string> = {
+  NEW: "New",
+  REVIEWING: "Reviewing",
+  NEEDS_INFORMATION: "Needs information",
+  READY_TO_QUOTE: "Ready to quote",
+  QUOTE_PREPARED: "Quote prepared",
+  QUOTE_SENT: "Quote sent",
+  WON: "Won",
+  LOST: "Lost",
+};
 
 export const OPPORTUNITY_STATUSES: LeadStatus[] = [
   "QUOTE_REQUESTED",
@@ -127,4 +189,12 @@ export function isMarketingStatus(value: string): value is MarketingStatus {
 
 export function isCampaignStatus(value: string): value is CampaignStatus {
   return CAMPAIGN_STATUSES.includes(value as CampaignStatus);
+}
+
+export function isInboxCategory(value: string): value is InboxCategory {
+  return INBOX_CATEGORIES.includes(value as InboxCategory);
+}
+
+export function isRfqStatus(value: string): value is RfqStatus {
+  return RFQ_STATUSES.includes(value as RfqStatus);
 }

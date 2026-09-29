@@ -39,6 +39,8 @@ export default async function SettingsPage({
         </div>
       </Panel>
       <Panel className="p-5 text-sm">
+        <Link className="text-accent" href="/settings/mailboxes">Mailboxes</Link>
+        <span className="mx-2 text-muted">·</span>
         <Link className="text-accent" href="/settings/suppression">Suppression list</Link>
         <span className="mx-2 text-muted">·</span>
         <Link className="text-accent" href="/settings/audit">Audit trail</Link>

@@ -13,6 +13,7 @@ import {
   removeProspectFromCampaign,
   updateCampaign,
 } from "@/services/campaign-service";
+import { sendDueEmails, type SendSummary } from "@/services/send-service";
 
 function actor(session: Awaited<ReturnType<typeof requireSession>>) {
   return { userId: session.user.id, workspaceId: session.workspace.id };
@@ -40,7 +41,7 @@ export async function updateCampaignAction(_prev: ActionState, formData: FormDat
     revalidatePath("/campaigns");
     revalidatePath(`/campaigns/${id}`);
     revalidatePath("/dashboard");
-    return { success: "Campaign saved. Activating a campaign does not send email." };
+    return { success: "Campaign saved. Active campaigns send during the configured window." };
   });
 }
 
@@ -76,6 +77,26 @@ export async function addProspectsToCampaignAction(
       error: result.added.length === 0 ? "No prospects were added." : undefined,
       rejected: result.rejected,
       addedCount: result.added.length,
+    };
+  });
+}
+
+export async function sendCampaignNowAction(campaignId: string): Promise<ActionState & { summary?: SendSummary }> {
+  return runAction(async () => {
+    const session = await requireSession();
+    const summary = await sendDueEmails({
+      workspaceId: session.workspace.id,
+      campaignId,
+      actorId: session.user.id,
+    });
+    revalidatePath(`/campaigns/${campaignId}`);
+    revalidatePath("/inbox");
+    revalidatePath("/dashboard");
+    revalidatePath("/pipeline");
+    const detail = summary.notes[0] ? ` ${summary.notes[0]}` : "";
+    return {
+      success: `Sent ${summary.sent}, skipped ${summary.skipped}, failed ${summary.failed}, replies ${summary.replies}.${detail}`,
+      summary,
     };
   });
 }

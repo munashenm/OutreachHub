@@ -57,11 +57,58 @@ enum ActivityType {
   LEAD_STATUS_CHANGED
   SUPPRESSION_ADDED
   SUPPRESSION_REMOVED
+  EMAIL_SENT
+  EMAIL_FAILED
+  REPLY_RECEIVED
+  TEMPLATE_CREATED
+  TEMPLATE_UPDATED
+  MAILBOX_CONNECTED
+  MAILBOX_DISCONNECTED
+  RFQ_CREATED
+  INBOX_UPDATED
 }
 
 enum MessageDirection {
   OUTBOUND
   INBOUND
+}
+
+enum MessageStatus {
+  SENT
+  FAILED
+  SKIPPED
+}
+
+enum MailboxProvider {
+  GOOGLE
+  MICROSOFT
+}
+
+enum MailboxConnectionStatus {
+  CONNECTED
+  NEEDS_RECONNECT
+}
+
+enum InboxCategory {
+  NEW_ENQUIRY
+  RFQ
+  PRICING_REQUEST
+  PRODUCT_ENQUIRY
+  ORDER_ENQUIRY
+  SUPPORT
+  CAMPAIGN_REPLY
+  OTHER
+}
+
+enum RfqStatus {
+  NEW
+  REVIEWING
+  NEEDS_INFORMATION
+  READY_TO_QUOTE
+  QUOTE_PREPARED
+  QUOTE_SENT
+  WON
+  LOST
 }
 
 model User {
@@ -110,6 +157,9 @@ model Workspace {
   leadStatusHistory LeadStatusHistory[]
   messages          Message[]
   campaignProspects CampaignProspect[]
+  mailboxes         Mailbox[]
+  emailTemplates    EmailTemplate[]
+  rfqs              Rfq[]
 }
 
 model Membership {
@@ -144,6 +194,7 @@ model Company {
   workspace  Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   prospects  Prospect[]
   activities Activity[]
+  rfqs       Rfq[]
 
   @@index([workspaceId])
   @@index([workspaceId, companyName])
@@ -177,6 +228,7 @@ model Prospect {
   activities        Activity[]
   statusHistory     LeadStatusHistory[]
   messages          Message[]
+  rfqs              Rfq[]
 
   @@unique([workspaceId, email])
   @@index([workspaceId, leadStatus])
@@ -195,10 +247,14 @@ model Campaign {
   timezone         String         @default("UTC")
   sendingStartTime String         @default("08:00")
   sendingEndTime   String         @default("17:00")
+  mailboxId        String?
+  templateId       String?
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 
   workspace    Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  mailbox      Mailbox?           @relation(fields: [mailboxId], references: [id], onDelete: SetNull)
+  template     EmailTemplate?     @relation(fields: [templateId], references: [id], onDelete: SetNull)
   prospects    CampaignProspect[]
   suppressions Suppression[]
   messages     Message[]
@@ -284,18 +340,98 @@ model Activity {
   @@index([campaignId])
 }
 
-/// Reserved for a future sending phase. Phase 1 does not insert rows.
+model Mailbox {
+  id                     String          @id @default(cuid())
+  workspaceId            String
+  provider               MailboxProvider @default(GOOGLE)
+  email                  String
+  connectionStatus       MailboxConnectionStatus @default(CONNECTED)
+  accessTokenEncrypted   String
+  refreshTokenEncrypted  String
+  tokenExpiresAt         DateTime
+  historyId              String?
+  lastSyncAt             DateTime?
+  lastError              String?
+  lastSuccessfulSendAt   DateTime?
+  lastInboundSyncAt      DateTime?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaigns Campaign[]
+
+  @@unique([workspaceId, provider, email])
+  @@index([workspaceId])
+}
+
+model EmailTemplate {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  subject     String
+  body        String
+  htmlBody    String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaigns Campaign[]
+
+  @@index([workspaceId])
+}
+
 model Message {
   id          String           @id @default(cuid())
   workspaceId String
   campaignId  String?
   prospectId  String?
   direction   MessageDirection
-  createdAt   DateTime         @default(now())
+  status      MessageStatus    @default(SENT)
+  subject           String           @default("")
+  body              String           @default("")
+  snippet           String           @default("")
+  fromEmail         String?
+  fromName          String?
+  internetMessageId String?
+  category          InboxCategory?
+  ignored           Boolean          @default(false)
+  error             String?
+  externalId        String?
+  threadId          String?
+  sentAt            DateTime?
+  createdAt         DateTime         @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   campaign  Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   prospect  Prospect? @relation(fields: [prospectId], references: [id], onDelete: SetNull)
+  rfqs      Rfq[]
 
-  @@index([workspaceId, direction])
+  @@unique([workspaceId, externalId])
+  @@index([workspaceId, direction, status])
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, threadId])
+  @@index([campaignId, prospectId])
+}
+
+model Rfq {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  prospectId      String?
+  companyId       String?
+  sourceMessageId String
+  subject         String
+  description     String    @default("")
+  notes           String    @default("")
+  status          RfqStatus @default(NEW)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  prospect      Prospect? @relation(fields: [prospectId], references: [id], onDelete: SetNull)
+  company       Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  sourceMessage Message   @relation(fields: [sourceMessageId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, createdAt])
+  @@index([sourceMessageId])
 }

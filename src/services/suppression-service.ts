@@ -27,7 +27,7 @@ export async function suppressedEmailSet(workspaceId: string, emails: string[]) 
 
 export async function ensureSuppression(
   db: DbClient,
-  actor: Actor,
+  actor: { userId: string | null; workspaceId: string },
   input: { email: string; reason: string; source?: string | null; campaignId?: string | null },
 ) {
   const existing = await db.suppression.findUnique({

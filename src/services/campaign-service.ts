@@ -48,10 +48,25 @@ export async function listCampaignOptions(workspaceId: string) {
   });
 }
 
+async function senderAccountFor(workspaceId: string, mailboxId: string | null, templateId: string | null) {
+  let senderAccount: string | null = null;
+  if (mailboxId) {
+    const mailbox = await getDb().mailbox.findFirst({ where: { id: mailboxId, workspaceId }, select: { email: true } });
+    if (!mailbox) throw new AppError("Mailbox not found in this workspace.");
+    senderAccount = mailbox.email;
+  }
+  if (templateId) {
+    const template = await getDb().emailTemplate.findFirst({ where: { id: templateId, workspaceId }, select: { id: true } });
+    if (!template) throw new AppError("Template not found in this workspace.");
+  }
+  return senderAccount;
+}
+
 export async function createCampaign(actor: Actor, input: CampaignInput) {
+  const senderAccount = await senderAccountFor(actor.workspaceId, input.mailboxId, input.templateId);
   return getDb().$transaction(async (tx) => {
     const campaign = await tx.campaign.create({
-      data: { ...input, workspaceId: actor.workspaceId },
+      data: { ...input, senderAccount, workspaceId: actor.workspaceId },
     });
     await recordActivity(tx, {
       workspaceId: actor.workspaceId,
@@ -69,8 +84,9 @@ export async function updateCampaign(actor: Actor, id: string, input: CampaignIn
     where: { id, workspaceId: actor.workspaceId },
   });
   if (!current) throw new AppError("Campaign not found.", 404, "NOT_FOUND");
+  const senderAccount = await senderAccountFor(actor.workspaceId, input.mailboxId, input.templateId);
   return getDb().$transaction(async (tx) => {
-    const campaign = await tx.campaign.update({ where: { id: current.id }, data: input });
+    const campaign = await tx.campaign.update({ where: { id: current.id }, data: { ...input, senderAccount } });
     await recordActivity(tx, {
       workspaceId: actor.workspaceId,
       actorId: actor.userId,

@@ -17,7 +17,7 @@ export default async function CampaignsPage({
     <div>
       <PageHeader
         title="Campaigns"
-        description="Plan campaigns and choose eligible prospects. Email is not sent from this release."
+        description="Plan campaigns, attach a mailbox and template, then send to eligible prospects."
         actions={<Link className={buttonPrimary} href="/campaigns/new">New campaign</Link>}
       />
       {status === "deleted" ? <Notice tone="success">Campaign deleted.</Notice> : null}
