@@ -6,6 +6,7 @@ const PUBLIC_PATHS = new Set([
   "/register",
   "/forgot-password",
   "/reset-password",
+  "/api/health",
 ]);
 
 export async function proxy(request: NextRequest) {
