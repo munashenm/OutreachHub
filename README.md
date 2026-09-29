@@ -2,7 +2,7 @@
 
 Sales outreach, lead management, and CRM. Each customer organisation is a separate workspace.
 
-The app includes authentication, prospects, companies, a product catalogue, supplier price files, numbered quotations, a compliance suppression list, a pipeline, campaign setup, Gmail sending, and an audit trail. A supplier row is saved only when its SKU already exists. A quotation keeps the prices staff entered, then receives a number and a validity date when it is sent.
+The app includes authentication, prospects, companies, a product catalogue, supplier stock feeds, numbered quotations, a compliance suppression list, a pipeline, campaign setup, Gmail sending, and an audit trail. A supplier stock feed matches existing SKUs, stores the stock level, and sets the sell price from the supplier cost plus a markup. Those quantities can be sent to the Urban Focus WooCommerce website. Website orders are imported on the same stock sync and linked when the billing email already exists. Pending, processing, and on-hold lines that match a catalogue SKU reduce the quantity left and the quantity sent to the website. Products with a supplier record, or with stock already held, appear as short when nothing is left. A draft quotation warns when its lines ask for more than that.
 
 ## Local setup
 
@@ -32,4 +32,4 @@ This service is the Urban Focus store. Set `DATABASE_URL`, `SESSION_SECRET`, `AP
 
 After the first deploy, open `/register` and create the staff account. The workspace name is Urban Focus. Registration closes after that account exists. Then connect `sales@urbanfocus.co.za` under Settings → Mailboxes.
 
-Schedule `POST /api/cron/gmail-sync` and `POST /api/cron/send` with `Authorization: Bearer $CRON_SECRET`.
+Schedule `POST /api/cron/gmail-sync`, `POST /api/cron/send`, and `POST /api/cron/stock-sync` with `Authorization: Bearer $CRON_SECRET`.

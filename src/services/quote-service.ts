@@ -6,6 +6,7 @@ import { ownedByWorkspace } from "../lib/gmail-sync";
 import { recordActivity } from "./activity-service";
 import { getRfq } from "./rfq-service";
 import { sendThreadReply } from "./reply-service";
+import { queueStockForWebsite } from "./stock-sync-service";
 import type { Actor } from "./types";
 
 export async function quotesForRfq(workspaceId: string, rfqId: string) {
@@ -149,5 +150,6 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
       type: "QUOTE_SENT",
       summary: `Sent quotation ${formatQuoteNumber(quoteNumber, quoteIssuedAt)} for “${rfq.subject}”.`,
     });
+    await queueStockForWebsite(tx, actor.workspaceId, prepared.lines.map((line) => line.productId ?? ""));
   });
 }

@@ -186,6 +186,19 @@ export const draftSchema = z.object({
   body: z.string().trim().max(10000).optional().default(""),
 });
 
+export const supplierFeedSchema = z.object({
+  supplierId: z.string().trim().min(1),
+  markupPercent: z.coerce.number().int().min(0).max(300),
+  stockFeedUrl: z.string().trim().max(500).optional().default(""),
+  stockFeedKey: z.string().trim().max(500).optional().default(""),
+});
+
+export const storeConnectionSchema = z.object({
+  storeBaseUrl: z.string().trim().max(500).optional().default(""),
+  consumerKey: z.string().trim().max(500).optional().default(""),
+  consumerSecret: z.string().trim().max(500).optional().default(""),
+});
+
 export const supplierSchema = z.object({
   name: requiredText(160, "Supplier name"),
   email: optionalEmail,

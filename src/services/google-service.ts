@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { AppError } from "../lib/errors";
 import { buildRawEmail } from "../lib/email-mime";
 import { headerFrom, type GmailPart } from "../lib/gmail-message";
@@ -6,6 +7,8 @@ import { isHistoryExpired } from "../lib/gmail-sync";
 const GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN = "https://oauth2.googleapis.com/token";
 const GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me";
+
+export const GOOGLE_OAUTH_STATE_COOKIE = "outreachhub_google_oauth";
 
 export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/gmail.send",
@@ -18,21 +21,89 @@ function requiredEnv(name: string) {
   return value;
 }
 
+function stripWrappingQuotes(value: string) {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith("\"") && trimmed.endsWith("\""))
+    || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+export function normalizeAppOrigin(value: string | undefined, production: boolean) {
+  const raw = stripWrappingQuotes(value ?? "");
+  const fallback = raw || (!production ? "http://localhost:3000" : "");
+  if (!fallback) throw new AppError("APP_URL is not configured.", 500, "CONFIG");
+  let url: URL;
+  try {
+    url = new URL(fallback);
+  } catch {
+    throw new AppError("APP_URL must be an absolute URL.", 500, "CONFIG");
+  }
+  const localhost = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (url.username || url.password || url.search || url.hash || (url.pathname !== "/" && url.pathname !== "")) {
+    throw new AppError("APP_URL must be the site origin only.", 500, "CONFIG");
+  }
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && localhost && !production)) {
+    throw new AppError("APP_URL must use https.", 500, "CONFIG");
+  }
+  return url.origin;
+}
+
 export function googleRedirectUri() {
-  return `${(process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "")}/api/google/callback`;
+  return `${normalizeAppOrigin(process.env.APP_URL, process.env.NODE_ENV === "production")}/api/google/callback`;
+}
+
+function googleClientId() {
+  const value = stripWrappingQuotes(requiredEnv("GOOGLE_CLIENT_ID"));
+  if (!value || /\s/.test(value) || !value.endsWith(".apps.googleusercontent.com")) {
+    throw new AppError("GOOGLE_CLIENT_ID must be the Web client id.", 500, "CONFIG");
+  }
+  return value;
 }
 
 export function googleAuthUrl(state: string) {
+  if (!state || /\s/.test(state)) throw new AppError("OAuth state is missing.", 500, "CONFIG");
+  const clientId = googleClientId();
+  const redirectUri = googleRedirectUri();
   const params = new URLSearchParams({
-    client_id: requiredEnv("GOOGLE_CLIENT_ID"),
-    redirect_uri: googleRedirectUri(),
+    client_id: clientId,
+    redirect_uri: redirectUri,
     response_type: "code",
     scope: GOOGLE_SCOPES,
     access_type: "offline",
     prompt: "consent",
+    include_granted_scopes: "true",
     state,
   });
-  return `${GOOGLE_AUTH}?${params.toString()}`;
+  const query = params.toString().replaceAll("+", "%20");
+  const clientSuffix = clientId.slice(0, -".apps.googleusercontent.com".length).slice(-8);
+  console.info(`google oauth authorize client_id_suffix=${clientSuffix} redirect_uri=${redirectUri} response_type=code scopes=gmail.send,gmail.readonly access_type=offline prompt=consent include_granted_scopes=true state=present`);
+  return `${GOOGLE_AUTH}?${query}`;
+}
+
+export function googleOauthStateHash(state: string) {
+  return createHash("sha256").update(state).digest("base64url");
+}
+
+export function googleOauthStateMatches(cookieValue: string | undefined, state: string) {
+  if (!cookieValue || !state) return false;
+  const expected = Buffer.from(googleOauthStateHash(state));
+  const actual = Buffer.from(cookieValue);
+  if (expected.length !== actual.length) return false;
+  return timingSafeEqual(expected, actual);
+}
+
+export function googleOauthStateCookieOptions(maxAge: number) {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax" as const,
+    path: "/api/google/callback",
+    maxAge,
+  };
 }
 
 type GoogleToken = { access_token: string; refresh_token?: string; expires_in: number };
@@ -42,8 +113,8 @@ async function tokenRequest(fields: Record<string, string>): Promise<GoogleToken
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: requiredEnv("GOOGLE_CLIENT_ID"),
-      client_secret: requiredEnv("GOOGLE_CLIENT_SECRET"),
+      client_id: googleClientId(),
+      client_secret: stripWrappingQuotes(requiredEnv("GOOGLE_CLIENT_SECRET")),
       ...fields,
     }),
   });

@@ -2,12 +2,21 @@ import Link from "next/link";
 import { EmptyState, PageHeader, Panel, StatCard } from "@/components/ui";
 import { formatDateTime } from "@/lib/format";
 import { CAMPAIGN_STATUS_LABELS, LEAD_STATUS_LABELS } from "@/lib/labels";
+import { isShortStock } from "@/lib/stock";
 import { requireSession } from "@/services/auth-service";
 import { getDashboard } from "@/services/dashboard-service";
+import { listProducts } from "@/services/product-service";
+import { reservedByProduct, supplierTrackedProductIds } from "@/services/stock-sync-service";
 
 export default async function DashboardPage() {
   const session = await requireSession();
-  const data = await getDashboard(session.workspace.id);
+  const [data, products, reserved, tracked] = await Promise.all([
+    getDashboard(session.workspace.id),
+    listProducts(session.workspace.id),
+    reservedByProduct(session.workspace.id),
+    supplierTrackedProductIds(session.workspace.id),
+  ]);
+  const shortStock = products.filter((product) => isShortStock(product.stockOnHand, reserved.get(product.id) ?? 0, tracked.has(product.id))).length;
   const maxPipeline = Math.max(...data.pipeline.map((item) => item.count), 1);
 
   return (
@@ -25,6 +34,7 @@ export default async function DashboardPage() {
         <StatCard label="Quotes requested" value={data.quotesRequested} hint="Prospects currently at quote requested." />
         <StatCard label="Active campaigns" value={data.activeCampaigns} hint="Campaigns with status Active." />
         <StatCard label="Mailbox" value={data.mailbox ? 1 : 0} hint={data.mailbox ? `${data.mailbox.email} · ${data.mailbox.connectionStatus}${data.mailbox.lastError ? ` · ${data.mailbox.lastError}` : ""}` : "No Google mailbox connected."} />
+        <StatCard label="Short stock" value={shortStock} hint="Tracked products with nothing left after open quotations and open website orders." />
       </div>
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <Panel className="p-5">

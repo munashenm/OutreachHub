@@ -3,6 +3,7 @@ import { getDb } from "../lib/db";
 import { AppError } from "../lib/errors";
 import { ownedByWorkspace, rfqDraftFromMessage } from "../lib/gmail-sync";
 import { recordActivity } from "./activity-service";
+import { queueStockForWebsite } from "./stock-sync-service";
 import type { Actor } from "./types";
 
 const include = {
@@ -68,8 +69,16 @@ export async function createRfqFromMessage(actor: Actor, messageId: string) {
 export async function updateRfq(actor: Actor, id: string, input: { status: RfqStatus; notes: string }) {
   const current = await getRfq(actor.workspaceId, id);
   if (!current) throw new AppError("RFQ not found.", 404, "NOT_FOUND");
-  return getDb().rfq.update({
+  const updated = await getDb().rfq.update({
     where: { id: current.id },
     data: { status: input.status, notes: input.notes },
   });
+  if (input.status === "WON" || input.status === "LOST") {
+    const lines = await getDb().quoteLine.findMany({
+      where: { workspaceId: actor.workspaceId, quote: { rfqId: current.id, status: "SENT" } },
+      select: { productId: true },
+    });
+    await queueStockForWebsite(getDb(), actor.workspaceId, lines.map((line) => line.productId ?? ""));
+  }
+  return updated;
 }

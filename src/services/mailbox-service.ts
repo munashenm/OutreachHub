@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import { getDb } from "../lib/db";
 import { AppError } from "../lib/errors";
@@ -20,6 +21,7 @@ export async function signMailboxState(userId: string, workspaceId: string) {
   return new SignJWT({ wid: workspaceId })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(userId)
+    .setJti(randomUUID())
     .setIssuedAt()
     .setExpirationTime("10m")
     .sign(stateKey());

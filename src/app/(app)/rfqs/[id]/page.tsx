@@ -12,6 +12,8 @@ import { centsToInput } from "@/services/product-service";
 import { listProducts } from "@/services/product-service";
 import { quotesForRfq } from "@/services/quote-service";
 import { lowestCostsByProduct } from "@/services/supplier-service";
+import { reservedByProduct } from "@/services/stock-sync-service";
+import { stockLeft } from "@/lib/stock";
 import { requireSession } from "@/services/auth-service";
 import { getThread } from "@/services/reply-service";
 import { getRfq } from "@/services/rfq-service";
@@ -27,6 +29,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
     listProducts(session.workspace.id),
   ]);
   const costs = await lowestCostsByProduct(session.workspace.id, products.map((product) => product.id));
+  const reserved = await reservedByProduct(session.workspace.id);
   const target = replyTargets(rfq.sourceMessage);
   const draft = quotes.find((quote) => quote.status === "DRAFT");
   const sentQuotes = quotes.filter((quote) => quote.status === "SENT");
@@ -63,6 +66,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
               description: line.description,
               quantity: Number(line.quantity).toString(),
               unitPriceCents: line.unitPriceCents,
+              productId: line.productId,
             }))}
             products={products.filter((product) => product.active).map((product) => ({
               id: product.id,
@@ -71,6 +75,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
               unitPrice: centsToInput(product.unitPriceCents),
               unitPriceCents: product.unitPriceCents,
               costCents: costs.get(product.id) ?? null,
+              stockLeft: stockLeft(product.stockOnHand, reserved.get(product.id) ?? 0),
             }))}
             subject={rfq.subject}
             customerName={rfq.prospect ? fullName(rfq.prospect.firstName, rfq.prospect.lastName) : ""}

@@ -95,6 +95,8 @@ export const ACTIVITY_LABELS = {
   PRODUCT_CREATED: "Product created",
   QUOTE_SENT: "Quote sent",
   SUPPLIER_IMPORTED: "Supplier prices imported",
+  STOCK_SYNCED: "Stock updated",
+  STORE_ORDERS_IMPORTED: "Website orders imported",
 } as const;
 
 export const INBOX_CATEGORIES = [

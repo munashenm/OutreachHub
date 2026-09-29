@@ -4,10 +4,11 @@ import { useActionState, useState } from "react";
 import { addQuoteLineAction, removeQuoteLineAction, sendQuoteAction } from "@/actions/quote-actions";
 import { Field, buttonPrimary, buttonSecondary, inputClass, textAreaClass } from "@/components/ui";
 import { formatCents, formatQuoteEmail, lineTotalCents, quoteTotalCents } from "@/lib/quote";
+import { linesExceedingStock } from "@/lib/stock";
 import { initialActionState } from "@/lib/format";
 
-type Line = { id: string; description: string; quantity: string; unitPriceCents: number };
-type ProductOption = { id: string; sku: string; name: string; unitPrice: string; unitPriceCents: number; costCents: number | null };
+type Line = { id: string; description: string; quantity: string; unitPriceCents: number; productId: string | null };
+type ProductOption = { id: string; sku: string; name: string; unitPrice: string; unitPriceCents: number; costCents: number | null; stockLeft: number };
 
 export function QuotePanel({
   rfqId,
@@ -37,6 +38,12 @@ export function QuotePanel({
   const [validDays, setValidDays] = useState("14");
   const [notes, setNotes] = useState("");
   const selected = products.find((item) => item.id === productId);
+  const leftByProduct = new Map(products.map((product) => [product.id, product.stockLeft]));
+  const shortProductIds = new Set(linesExceedingStock(
+    lines.map((line) => ({ productId: line.productId, quantity: Number(line.quantity) })),
+    leftByProduct,
+  ));
+  const shortNames = products.filter((product) => shortProductIds.has(product.id)).map((product) => product.sku);
   const total = quoteTotalCents(lines.map((line) => ({ quantity: Number(line.quantity), unitPriceCents: line.unitPriceCents })));
   const preview = lines.length === 0 ? "" : formatQuoteEmail({
     subject,
@@ -80,6 +87,9 @@ export function QuotePanel({
         </table>
       )}
       <p className="text-sm font-medium">Total {total === null ? "—" : formatCents(total, currency)}</p>
+      {shortNames.length > 0 ? (
+        <p className="text-sm text-amber-900">This draft asks for more than is left of {shortNames.join(", ")}. Sending it will reserve that quantity.</p>
+      ) : null}
       {sent ? <p className="text-sm text-muted">This quote was sent in the Gmail thread. Add a new line to start another draft.</p> : (
         <>
           <form action={formAction} className="grid gap-3 md:grid-cols-2">
@@ -99,7 +109,7 @@ export function QuotePanel({
                 }}
               >
                 <option value="">Custom line</option>
-                {products.map((product) => <option key={product.id} value={product.id}>{product.sku} — {product.name}</option>)}
+                {products.map((product) => <option key={product.id} value={product.id}>{product.sku} — {product.name} ({product.stockLeft} left)</option>)}
               </select>
             </Field>
             {selected?.costCents != null ? <p className="text-sm text-muted md:col-span-2">Lowest supplier cost {formatCents(selected.costCents, currency)}. The unit price stays the catalogue sell price until you change it.</p> : null}

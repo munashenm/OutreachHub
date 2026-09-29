@@ -69,6 +69,8 @@ enum ActivityType {
   PRODUCT_CREATED
   QUOTE_SENT
   SUPPLIER_IMPORTED
+  STOCK_SYNCED
+  STORE_ORDERS_IMPORTED
 }
 
 enum MessageDirection {
@@ -147,9 +149,14 @@ model Workspace {
   id        String   @id @default(cuid())
   name      String
   slug      String   @unique
-  isDemo        Boolean  @default(false)
-  quoteSequence Int      @default(0)
-  createdAt     DateTime @default(now())
+  isDemo              Boolean   @default(false)
+  quoteSequence       Int       @default(0)
+  storeBaseUrl        String?
+  storeKeyEncrypted   String?
+  storeSecretEncrypted String?
+  storeLastSyncAt     DateTime?
+  storeLastError      String?
+  createdAt           DateTime  @default(now())
   updatedAt DateTime @updatedAt
 
   memberships       Membership[]
@@ -167,6 +174,7 @@ model Workspace {
   products          Product[]
   quotes            Quote[]
   suppliers         Supplier[]
+  storeOrders       StoreOrder[]
 }
 
 model Membership {
@@ -236,6 +244,7 @@ model Prospect {
   statusHistory     LeadStatusHistory[]
   messages          Message[]
   rfqs              Rfq[]
+  storeOrders       StoreOrder[]
 
   @@unique([workspaceId, email])
   @@index([workspaceId, leadStatus])
@@ -458,12 +467,14 @@ model Product {
   unitPriceCents Int
   currency       String   @default("ZAR")
   active         Boolean  @default(true)
+  stockOnHand    Int      @default(0)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   quoteLines QuoteLine[]
   supplierPrices SupplierPrice[]
+  storeOrderLines StoreOrderLine[]
 
   @@unique([workspaceId, sku])
   @@index([workspaceId, active])
@@ -513,8 +524,13 @@ model Supplier {
   workspaceId String
   name        String
   email       String?
-  notes       String   @default("")
-  createdAt   DateTime @default(now())
+  notes                  String   @default("")
+  markupPercent          Int      @default(0)
+  stockFeedUrl           String?
+  stockFeedKeyEncrypted  String?
+  lastStockSyncAt        DateTime?
+  lastStockSyncError     String?
+  createdAt              DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -530,6 +546,7 @@ model SupplierPrice {
   productId   String
   supplierSku String
   costCents   Int
+  stockQty    Int      @default(0)
   updatedAt   DateTime @updatedAt
 
   supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
@@ -537,5 +554,46 @@ model SupplierPrice {
 
   @@unique([supplierId, productId])
   @@index([workspaceId])
+  @@index([productId])
+}
+
+model StoreOrder {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  externalId   String
+  number       String
+  status       String
+  email        String
+  customerName String
+  companyName  String   @default("")
+  totalCents   Int
+  currency     String   @default("ZAR")
+  summary      String   @default("")
+  placedAt     DateTime
+  prospectId   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  prospect  Prospect? @relation(fields: [prospectId], references: [id], onDelete: SetNull)
+  lines     StoreOrderLine[]
+
+  @@unique([workspaceId, externalId])
+  @@index([workspaceId, placedAt])
+}
+
+model StoreOrderLine {
+  id          String @id @default(cuid())
+  workspaceId String
+  orderId     String
+  productId   String?
+  sku         String
+  quantity    Int
+
+  order   StoreOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product?   @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([orderId])
   @@index([productId])
 }

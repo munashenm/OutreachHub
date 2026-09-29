@@ -190,6 +190,7 @@ function NavIconSvg({ name }: { name: NavIcon }) {
     inbox: "M3 12 5 5h14l2 7v7H3zM3 12h5l1 2h6l1-2h5",
     rfqs: "M6 3h9l5 5v13H6zM9 13h6M9 17h4",
     products: "M4 7h16v12H4zM8 7V5h8v2",
+    orders: "M6 3h12v18H6zM9 8h6M9 12h6M9 16h4",
     suppliers: "M3 7h13l5 5v7H3zM3 12h18",
     pipeline: "M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v6h-4z",
     templates: "M6 3h9l5 5v13H6zM15 3v5h5",

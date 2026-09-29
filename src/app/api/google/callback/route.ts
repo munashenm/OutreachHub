@@ -1,22 +1,34 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { AppError } from "@/lib/errors";
+import {
+  GOOGLE_OAUTH_STATE_COOKIE,
+  googleOauthStateCookieOptions,
+  googleOauthStateMatches,
+  normalizeAppOrigin,
+} from "@/services/google-service";
 import { connectMailbox, readMailboxState } from "@/services/mailbox-service";
 
-export async function GET(request: Request) {
+function finish(location: string) {
+  const response = NextResponse.redirect(location);
+  response.cookies.set(GOOGLE_OAUTH_STATE_COOKIE, "", googleOauthStateCookieOptions(0));
+  return response;
+}
+
+export async function GET(request: NextRequest) {
   const url = new URL(request.url);
-  const appUrl = (process.env.APP_URL ?? url.origin).replace(/\/$/, "");
+  const appUrl = normalizeAppOrigin(process.env.APP_URL, process.env.NODE_ENV === "production");
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
-  if (!code || !state) {
-    return NextResponse.redirect(`${appUrl}/settings/mailboxes?status=error`);
+  const cookie = request.cookies.get(GOOGLE_OAUTH_STATE_COOKIE)?.value;
+  if (!code || !state || !googleOauthStateMatches(cookie, state)) {
+    return finish(`${appUrl}/settings/mailboxes?status=error`);
   }
   try {
     const session = await readMailboxState(state);
     await connectMailbox({ ...session, code, provider: "GOOGLE" });
-    return NextResponse.redirect(`${appUrl}/settings/mailboxes?status=connected`);
+    return finish(`${appUrl}/settings/mailboxes?status=connected`);
   } catch (error) {
-    console.error(error);
     const reason = error instanceof AppError ? "denied" : "error";
-    return NextResponse.redirect(`${appUrl}/settings/mailboxes?status=${reason}`);
+    return finish(`${appUrl}/settings/mailboxes?status=${reason}`);
   }
 }
