@@ -1,0 +1,301 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum MarketingStatus {
+  UNKNOWN
+  CONSENT_REQUESTED
+  CONSENTED
+  EXISTING_CUSTOMER
+  OPTED_OUT
+  BOUNCED
+  BLOCKED
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  RESPONDED
+  QUALIFIED
+  QUOTE_REQUESTED
+  QUOTE_SENT
+  NEGOTIATING
+  WON
+  LOST
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+enum ActivityType {
+  PROSPECT_CREATED
+  PROSPECT_EDITED
+  PROSPECT_DELETED
+  COMPANY_CREATED
+  COMPANY_EDITED
+  COMPANY_DELETED
+  CAMPAIGN_CREATED
+  CAMPAIGN_UPDATED
+  PROSPECT_ADDED_TO_CAMPAIGN
+  MARKETING_STATUS_CHANGED
+  LEAD_STATUS_CHANGED
+  SUPPRESSION_ADDED
+  SUPPRESSION_REMOVED
+}
+
+enum MessageDirection {
+  OUTBOUND
+  INBOUND
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships          Membership[]
+  passwordResetTokens  PasswordResetToken[]
+  activities           Activity[]         @relation("ActivityActor")
+  suppressions         Suppression[]
+  leadStatusChanges    LeadStatusHistory[]
+  campaignProspectAdds CampaignProspect[] @relation("CampaignProspectAdder")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  isDemo    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships       Membership[]
+  companies         Company[]
+  prospects         Prospect[]
+  campaigns         Campaign[]
+  activities        Activity[]
+  suppressions      Suppression[]
+  leadStatusHistory LeadStatusHistory[]
+  messages          Message[]
+  campaignProspects CampaignProspect[]
+}
+
+model Membership {
+  id          String         @id @default(cuid())
+  userId      String
+  workspaceId String
+  role        MembershipRole @default(MEMBER)
+  createdAt   DateTime       @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+}
+
+model Company {
+  id          String   @id @default(cuid())
+  workspaceId String
+  companyName String
+  website     String?
+  industry    String?
+  companySize String?
+  phone       String?
+  country     String?
+  province    String?
+  city        String?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace  Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  prospects  Prospect[]
+  activities Activity[]
+
+  @@index([workspaceId])
+  @@index([workspaceId, companyName])
+}
+
+model Prospect {
+  id              String          @id @default(cuid())
+  workspaceId     String
+  firstName       String
+  lastName        String
+  jobTitle        String?
+  email           String
+  phone           String?
+  companyId       String?
+  website         String?
+  industry        String?
+  country         String?
+  province        String?
+  city            String?
+  source          String?
+  linkedinUrl     String?
+  notes           String?
+  leadStatus      LeadStatus      @default(NEW)
+  marketingStatus MarketingStatus @default(UNKNOWN)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  workspace         Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  company           Company?            @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  campaignProspects CampaignProspect[]
+  activities        Activity[]
+  statusHistory     LeadStatusHistory[]
+  messages          Message[]
+
+  @@unique([workspaceId, email])
+  @@index([workspaceId, leadStatus])
+  @@index([workspaceId, marketingStatus])
+  @@index([workspaceId, lastName, firstName])
+}
+
+model Campaign {
+  id               String         @id @default(cuid())
+  workspaceId      String
+  name             String
+  description      String?
+  status           CampaignStatus @default(DRAFT)
+  senderAccount    String?
+  dailyLimit       Int            @default(50)
+  timezone         String         @default("UTC")
+  sendingStartTime String         @default("08:00")
+  sendingEndTime   String         @default("17:00")
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  workspace    Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  prospects    CampaignProspect[]
+  suppressions Suppression[]
+  messages     Message[]
+  activities   Activity[]
+
+  @@index([workspaceId, status])
+}
+
+model CampaignProspect {
+  id          String   @id @default(cuid())
+  workspaceId String
+  campaignId  String
+  prospectId  String
+  addedById   String?
+  addedAt     DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign  Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  prospect  Prospect  @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  addedBy   User?     @relation("CampaignProspectAdder", fields: [addedById], references: [id], onDelete: SetNull)
+
+  @@unique([campaignId, prospectId])
+  @@index([workspaceId])
+  @@index([prospectId])
+}
+
+model Suppression {
+  id          String   @id @default(cuid())
+  workspaceId String
+  email       String
+  reason      String
+  source      String?
+  campaignId  String?
+  userId      String?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign  Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, email])
+  @@index([workspaceId, createdAt])
+}
+
+model LeadStatusHistory {
+  id          String      @id @default(cuid())
+  workspaceId String
+  prospectId  String
+  fromStatus  LeadStatus?
+  toStatus    LeadStatus
+  changedById String?
+  createdAt   DateTime    @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  prospect  Prospect  @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  changedBy User?     @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([prospectId, createdAt])
+}
+
+model Activity {
+  id          String       @id @default(cuid())
+  workspaceId String
+  type        ActivityType
+  actorId     String?
+  prospectId  String?
+  companyId   String?
+  campaignId  String?
+  summary     String
+  metadata    Json?
+  createdAt   DateTime     @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor     User?     @relation("ActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+  prospect  Prospect? @relation(fields: [prospectId], references: [id], onDelete: SetNull)
+  company   Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  campaign  Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([prospectId])
+  @@index([companyId])
+  @@index([campaignId])
+}
+
+/// Reserved for a future sending phase. Phase 1 does not insert rows.
+model Message {
+  id          String           @id @default(cuid())
+  workspaceId String
+  campaignId  String?
+  prospectId  String?
+  direction   MessageDirection
+  createdAt   DateTime         @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  campaign  Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  prospect  Prospect? @relation(fields: [prospectId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, direction])
+}
