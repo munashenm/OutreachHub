@@ -45,8 +45,8 @@ export function AppShell({ children, workspace, user, memberships, notifications
         }`}
       >
         <div className="px-5 py-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">OutreachHub</p>
-          <p className="mt-1 text-sm text-white">Sales workspace</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Urban Focus</p>
+          <p className="mt-1 text-sm text-white">Store</p>
         </div>
         <nav className="flex-1 space-y-1 px-3">
           {NAV_ITEMS.map((item) => {

@@ -8,8 +8,8 @@ const geistSans = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "OutreachHub",
-  description: "Sales outreach, lead management, and CRM.",
+  title: "Urban Focus",
+  description: "Urban Focus store enquiries, quotations, and campaigns.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

@@ -28,7 +28,7 @@ export default async function UnsubscribePage({
   return (
     <div className="flex min-h-screen items-center justify-center bg-canvas px-4 py-12">
       <div className="w-full max-w-md rounded-2xl border border-line bg-white p-6 shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">OutreachHub</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent">Urban Focus</p>
         <h1 className="mt-4 text-xl font-semibold">Stop marketing email</h1>
         {status === "done" ? (
           <p className="mt-3 text-sm text-muted">This address will not receive further marketing email from this workspace.</p>

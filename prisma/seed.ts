@@ -5,6 +5,10 @@ import { getDb } from "../src/lib/db";
 const demoEmail = "demo@outreachhub.example";
 
 async function main() {
+  if (process.env.NODE_ENV === "production" && process.env.SEED_DEMO !== "true") {
+    console.error("Demo data is not loaded in production. Open /register and create the Urban Focus staff account.");
+    return;
+  }
   const db = getDb();
   const existing = await db.workspace.findUnique({ where: { slug: "demo-workspace" } });
   if (existing) {

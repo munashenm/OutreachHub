@@ -110,6 +110,11 @@ async function createWorkspace(db: DbClient, userId: string, name: string) {
   throw new AppError("A workspace with a similar name already exists. Try a different name.");
 }
 
+export async function registrationOpen() {
+  const users = await getDb().user.count();
+  return users === 0;
+}
+
 export async function registerAccount(input: {
   name: string;
   email: string;
@@ -119,6 +124,10 @@ export async function registerAccount(input: {
   const passwordHash = await bcrypt.hash(input.password, 12);
   try {
     const created = await getDb().$transaction(async (tx) => {
+      const users = await tx.user.count();
+      if (users > 0) {
+        throw new AppError("The Urban Focus account already exists. Sign in instead.", 403, "FORBIDDEN");
+      }
       const user = await tx.user.create({
         data: { name: input.name, email: input.email, passwordHash },
       });

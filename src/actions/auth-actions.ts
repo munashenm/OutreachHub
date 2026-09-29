@@ -16,6 +16,7 @@ import {
   loginAccount,
   logoutAccount,
   registerAccount,
+  registrationOpen,
   requestPasswordReset,
   resetPassword,
 } from "@/services/auth-service";
@@ -24,6 +25,9 @@ export async function registerAction(_prev: ActionState, formData: FormData): Pr
   return runAction(async () => {
     const parsed = registerSchema.safeParse(readForm(formData));
     if (!parsed.success) return { fieldErrors: fieldErrors(parsed.error) };
+    if (!(await registrationOpen())) {
+      return { error: "The Urban Focus account already exists. Sign in instead." };
+    }
     await registerAccount(parsed.data);
     redirect("/dashboard");
   });

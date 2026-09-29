@@ -44,10 +44,10 @@ export function RegisterForm() {
         <input id="password" name="password" type="password" autoComplete="new-password" required className={inputClass} />
       </Field>
       <Field label="Workspace name" name="workspaceName" error={state.fieldErrors?.workspaceName}>
-        <input id="workspaceName" name="workspaceName" required className={inputClass} />
+        <input id="workspaceName" name="workspaceName" required defaultValue="Urban Focus" className={inputClass} />
       </Field>
       <button className={`${buttonPrimary} w-full`} disabled={pending}>
-        {pending ? "Creating..." : "Create workspace"}
+        {pending ? "Creating..." : "Create store account"}
       </button>
     </form>
   );

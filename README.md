@@ -28,4 +28,8 @@ The demo login is `demo@outreachhub.example` / `Demo-password-123`. The workspac
 
 ## Railway
 
-Set `DATABASE_URL`, `SESSION_SECRET`, `APP_URL`, `CRON_SECRET`, `OAUTH_ENCRYPTION_KEY`, `OPENAI_API_KEY`, and the Google OAuth client values. Schedule `POST /api/cron/gmail-sync` as well as `POST /api/cron/send`. Build with `npm run build`, start with `npm start`, and run `npx prisma migrate deploy` as the release command. Schedule `POST /api/cron/send` with `Authorization: Bearer $CRON_SECRET`.
+This service is the Urban Focus store. Set `DATABASE_URL`, `SESSION_SECRET`, `APP_URL`, `CRON_SECRET`, `OAUTH_ENCRYPTION_KEY`, and the Google OAuth client values. `railway.toml` builds with `npm run build`, applies migrations with `npx prisma migrate deploy`, and starts with `npm start`. Leave the start command as `npm start`. Do not run `npm run db:seed` on this database.
+
+After the first deploy, open `/register` and create the staff account. The workspace name is Urban Focus. Registration closes after that account exists. Then connect `sales@urbanfocus.co.za` under Settings → Mailboxes.
+
+Schedule `POST /api/cron/gmail-sync` and `POST /api/cron/send` with `Authorization: Bearer $CRON_SECRET`.
