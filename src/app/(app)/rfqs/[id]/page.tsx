@@ -2,10 +2,16 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ReplyForm } from "@/components/inbox-actions";
 import { RfqStatusForm } from "@/components/rfq-status-form";
+import { QuotePanel } from "@/components/quote-panel";
 import { PageHeader, Panel } from "@/components/ui";
 import { formatDateTime, fullName } from "@/lib/format";
+import { formatQuoteNumber } from "@/lib/quote";
 import { replyTargets } from "@/lib/gmail-message";
 import type { RfqStatus } from "@/lib/labels";
+import { centsToInput } from "@/services/product-service";
+import { listProducts } from "@/services/product-service";
+import { quotesForRfq } from "@/services/quote-service";
+import { lowestCostsByProduct } from "@/services/supplier-service";
 import { requireSession } from "@/services/auth-service";
 import { getThread } from "@/services/reply-service";
 import { getRfq } from "@/services/rfq-service";
@@ -15,8 +21,15 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
   const { id } = await params;
   const rfq = await getRfq(session.workspace.id, id);
   if (!rfq) notFound();
-  const thread = await getThread(session.workspace.id, rfq.sourceMessageId);
+  const [thread, quotes, products] = await Promise.all([
+    getThread(session.workspace.id, rfq.sourceMessageId),
+    quotesForRfq(session.workspace.id, rfq.id),
+    listProducts(session.workspace.id),
+  ]);
+  const costs = await lowestCostsByProduct(session.workspace.id, products.map((product) => product.id));
   const target = replyTargets(rfq.sourceMessage);
+  const draft = quotes.find((quote) => quote.status === "DRAFT");
+  const sentQuotes = quotes.filter((quote) => quote.status === "SENT");
   return (
     <div className="space-y-4">
       <PageHeader title={rfq.subject} description={`Created ${formatDateTime(rfq.createdAt)}`} actions={<Link href="/rfqs" className="text-sm text-accent">Back to RFQs</Link>} />
@@ -36,6 +49,46 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
             </article>
           ))}
         </div>
+      </Panel>
+      <Panel className="p-5">
+        <h2 className="font-semibold">Quote</h2>
+        <p className="mt-1 text-sm text-muted">Lines are priced from the catalogue or typed in. Sending uses the connected Gmail mailbox and stays in this thread.</p>
+        <div className="mt-4">
+          <QuotePanel
+            rfqId={rfq.id}
+            currency={draft?.currency ?? "ZAR"}
+            sent={false}
+            lines={(draft?.lines ?? []).map((line) => ({
+              id: line.id,
+              description: line.description,
+              quantity: Number(line.quantity).toString(),
+              unitPriceCents: line.unitPriceCents,
+            }))}
+            products={products.filter((product) => product.active).map((product) => ({
+              id: product.id,
+              sku: product.sku,
+              name: product.name,
+              unitPrice: centsToInput(product.unitPriceCents),
+              unitPriceCents: product.unitPriceCents,
+              costCents: costs.get(product.id) ?? null,
+            }))}
+            subject={rfq.subject}
+            customerName={rfq.prospect ? fullName(rfq.prospect.firstName, rfq.prospect.lastName) : ""}
+            companyName={rfq.company?.companyName ?? ""}
+          />
+        </div>
+        {sentQuotes.length > 0 ? (
+          <ul className="mt-4 space-y-1 text-sm text-muted">
+            {sentQuotes.map((quote) => (
+              <li key={quote.id}>
+                {quote.number != null && quote.issuedAt ? (
+                  <Link className="hover:underline" href={`/quotes/${quote.id}`}>{formatQuoteNumber(quote.number, quote.issuedAt)}</Link>
+                ) : "Quotation"}
+                {" "}sent {quote.sentAt ? formatDateTime(quote.sentAt) : ""} · {quote.lines.length} lines
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </Panel>
       <Panel className="p-5">
         <RfqStatusForm id={rfq.id} status={rfq.status as RfqStatus} notes={rfq.notes} />

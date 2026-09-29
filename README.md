@@ -2,7 +2,7 @@
 
 Sales outreach, lead management, and CRM. Each customer organisation is a separate workspace.
 
-The app includes authentication, prospects, companies, a compliance suppression list, a pipeline, campaign setup, Gmail and Microsoft 365 sending, AI template drafts, and an audit trail. It does not bill customers.
+The app includes authentication, prospects, companies, a product catalogue, supplier price files, numbered quotations, a compliance suppression list, a pipeline, campaign setup, Gmail sending, and an audit trail. A supplier row is saved only when its SKU already exists. A quotation keeps the prices staff entered, then receives a number and a validity date when it is sent.
 
 ## Local setup
 

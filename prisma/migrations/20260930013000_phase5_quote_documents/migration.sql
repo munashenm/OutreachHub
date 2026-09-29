@@ -1,0 +1,9 @@
+ALTER TABLE "Workspace" ADD COLUMN "quoteSequence" INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE "Quote" ADD COLUMN "number" INTEGER;
+ALTER TABLE "Quote" ADD COLUMN "issuedAt" TIMESTAMP(3);
+ALTER TABLE "Quote" ADD COLUMN "validDays" INTEGER NOT NULL DEFAULT 14;
+ALTER TABLE "Quote" ADD COLUMN "validUntil" TIMESTAMP(3);
+ALTER TABLE "Quote" ADD COLUMN "notes" TEXT NOT NULL DEFAULT '';
+
+CREATE UNIQUE INDEX "Quote_workspaceId_number_key" ON "Quote"("workspaceId", "number");

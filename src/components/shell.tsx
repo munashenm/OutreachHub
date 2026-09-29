@@ -40,7 +40,7 @@ export function AppShell({ children, workspace, user, memberships, notifications
         />
       ) : null}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-60 flex-col bg-sidebar text-sidebar-muted transition lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-60 flex-col bg-sidebar text-sidebar-muted transition print:hidden lg:static lg:translate-x-0 ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -67,7 +67,7 @@ export function AppShell({ children, workspace, user, memberships, notifications
         </nav>
       </aside>
       <div className="min-w-0">
-        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-line bg-white/95 px-4 backdrop-blur sm:px-6">
+        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-line bg-white/95 px-4 backdrop-blur print:hidden sm:px-6">
           <button
             type="button"
             className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-line lg:hidden"
@@ -189,6 +189,8 @@ function NavIconSvg({ name }: { name: NavIcon }) {
     campaigns: "M4 6h16M4 12h10M4 18h7",
     inbox: "M3 12 5 5h14l2 7v7H3zM3 12h5l1 2h6l1-2h5",
     rfqs: "M6 3h9l5 5v13H6zM9 13h6M9 17h4",
+    products: "M4 7h16v12H4zM8 7V5h8v2",
+    suppliers: "M3 7h13l5 5v7H3zM3 12h18",
     pipeline: "M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v6h-4z",
     templates: "M6 3h9l5 5v13H6zM15 3v5h5",
     tasks: "M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01",

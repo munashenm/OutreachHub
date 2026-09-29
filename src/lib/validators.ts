@@ -186,11 +186,39 @@ export const draftSchema = z.object({
   body: z.string().trim().max(10000).optional().default(""),
 });
 
+export const supplierSchema = z.object({
+  name: requiredText(160, "Supplier name"),
+  email: optionalEmail,
+  notes: z.string().trim().max(4000).optional().default(""),
+});
+
+export const productSchema = z.object({
+  sku: requiredText(60, "SKU"),
+  name: requiredText(160, "Product name"),
+  description: z.string().trim().max(4000).optional().default(""),
+  unitPrice: requiredText(20, "Unit price"),
+  active: z.enum(["true", "false"]).optional().default("true"),
+});
+
 export const templateSchema = z.object({
   name: requiredText(120, "Template name"),
   subject: requiredText(200, "Subject"),
   body: requiredText(10000, "Message"),
   htmlBody: z.string().trim().max(20000).optional().default(""),
+});
+
+export const quoteSendSchema = z.object({
+  rfqId: z.string().trim().min(1),
+  validDays: z.coerce.number().int().min(1).max(90),
+  notes: z.string().trim().max(2000).optional().default(""),
+});
+
+export const quoteLineSchema = z.object({
+  rfqId: z.string().trim().min(1),
+  productId: z.string().trim().optional().default(""),
+  description: requiredText(300, "Description"),
+  quantity: requiredText(20, "Quantity"),
+  unitPrice: requiredText(20, "Unit price"),
 });
 
 export const replySchema = z.object({
@@ -223,6 +251,8 @@ export type ProspectInput = z.infer<typeof prospectSchema>;
 export type CompanyInput = z.infer<typeof companySchema>;
 export type CampaignInput = z.infer<typeof campaignSchema>;
 export type TemplateInput = z.infer<typeof templateSchema>;
+export type ProductInput = z.infer<typeof productSchema>;
+export type SupplierInput = z.infer<typeof supplierSchema>;
 export type SuppressionInput = z.infer<typeof suppressionSchema>;
 
 export function fieldErrors(error: z.ZodError): Record<string, string> {

@@ -66,6 +66,9 @@ enum ActivityType {
   MAILBOX_DISCONNECTED
   RFQ_CREATED
   INBOX_UPDATED
+  PRODUCT_CREATED
+  QUOTE_SENT
+  SUPPLIER_IMPORTED
 }
 
 enum MessageDirection {
@@ -144,8 +147,9 @@ model Workspace {
   id        String   @id @default(cuid())
   name      String
   slug      String   @unique
-  isDemo    Boolean  @default(false)
-  createdAt DateTime @default(now())
+  isDemo        Boolean  @default(false)
+  quoteSequence Int      @default(0)
+  createdAt     DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   memberships       Membership[]
@@ -160,6 +164,9 @@ model Workspace {
   mailboxes         Mailbox[]
   emailTemplates    EmailTemplate[]
   rfqs              Rfq[]
+  products          Product[]
+  quotes            Quote[]
+  suppliers         Supplier[]
 }
 
 model Membership {
@@ -430,8 +437,105 @@ model Rfq {
   prospect      Prospect? @relation(fields: [prospectId], references: [id], onDelete: SetNull)
   company       Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
   sourceMessage Message   @relation(fields: [sourceMessageId], references: [id], onDelete: Cascade)
+  quotes        Quote[]
 
   @@index([workspaceId, status])
   @@index([workspaceId, createdAt])
   @@index([sourceMessageId])
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+}
+
+model Product {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  sku            String
+  name           String
+  description    String   @default("")
+  unitPriceCents Int
+  currency       String   @default("ZAR")
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  quoteLines QuoteLine[]
+  supplierPrices SupplierPrice[]
+
+  @@unique([workspaceId, sku])
+  @@index([workspaceId, active])
+}
+
+model Quote {
+  id          String      @id @default(cuid())
+  workspaceId String
+  rfqId       String
+  status      QuoteStatus @default(DRAFT)
+  currency    String      @default("ZAR")
+  number      Int?
+  issuedAt    DateTime?
+  validDays   Int         @default(14)
+  validUntil  DateTime?
+  notes       String      @default("")
+  sentAt      DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  rfq       Rfq         @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  lines     QuoteLine[]
+
+  @@unique([workspaceId, number])
+  @@index([workspaceId, rfqId])
+}
+
+model QuoteLine {
+  id             String  @id @default(cuid())
+  workspaceId    String
+  quoteId        String
+  productId      String?
+  description    String
+  quantity       Decimal @db.Decimal(12, 2)
+  unitPriceCents Int
+
+  quote   Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([quoteId])
+  @@index([workspaceId])
+}
+
+model Supplier {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  email       String?
+  notes       String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  prices    SupplierPrice[]
+
+  @@index([workspaceId])
+}
+
+model SupplierPrice {
+  id          String   @id @default(cuid())
+  workspaceId String
+  supplierId  String
+  productId   String
+  supplierSku String
+  costCents   Int
+  updatedAt   DateTime @updatedAt
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([supplierId, productId])
+  @@index([workspaceId])
+  @@index([productId])
 }

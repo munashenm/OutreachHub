@@ -92,6 +92,9 @@ export const ACTIVITY_LABELS = {
   MAILBOX_DISCONNECTED: "Mailbox disconnected",
   RFQ_CREATED: "RFQ created",
   INBOX_UPDATED: "Inbox updated",
+  PRODUCT_CREATED: "Product created",
+  QUOTE_SENT: "Quote sent",
+  SUPPLIER_IMPORTED: "Supplier prices imported",
 } as const;
 
 export const INBOX_CATEGORIES = [
