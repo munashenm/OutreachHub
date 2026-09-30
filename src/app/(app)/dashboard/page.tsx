@@ -6,17 +6,25 @@ import { isShortStock } from "@/lib/stock";
 import { requireSession } from "@/services/auth-service";
 import { getDashboard } from "@/services/dashboard-service";
 import { listProducts } from "@/services/product-service";
-import { reservedByProduct, supplierTrackedProductIds } from "@/services/stock-sync-service";
+import { getStoreConnection, reservedByProduct, supplierTrackedProductIds } from "@/services/stock-sync-service";
 
 export default async function DashboardPage() {
   const session = await requireSession();
-  const [data, products, reserved, tracked] = await Promise.all([
+  const [data, products, reserved, tracked, store] = await Promise.all([
     getDashboard(session.workspace.id),
     listProducts(session.workspace.id),
     reservedByProduct(session.workspace.id),
     supplierTrackedProductIds(session.workspace.id),
+    getStoreConnection(session.workspace.id),
   ]);
   const shortStock = products.filter((product) => isShortStock(product.stockOnHand, reserved.get(product.id) ?? 0, tracked.has(product.id))).length;
+  const missingImages = products.filter((product) => product.active && product.imageUrls.length === 0).length;
+  const mailboxHint = data.mailbox
+    ? `${data.mailbox.email} · last inbound ${data.mailbox.lastInboundSyncAt ? formatDateTime(data.mailbox.lastInboundSyncAt) : "not yet"}${data.mailbox.lastError ? ` · ${data.mailbox.lastError}` : ""}`
+    : "No Google mailbox connected.";
+  const storeHint = store?.connected
+    ? `${store.status} · last sync ${store.lastSyncAt ? formatDateTime(store.lastSyncAt) : "not yet"}${store.lastError ? ` · ${store.lastError}` : ""}`
+    : "Store API is not connected.";
   const maxPipeline = Math.max(...data.pipeline.map((item) => item.count), 1);
 
   return (
@@ -33,8 +41,10 @@ export default async function DashboardPage() {
         <StatCard label="Interested or responded" value={data.respondedLeads} hint="Responded, qualified, quoting, negotiating, or won." />
         <StatCard label="Quotes requested" value={data.quotesRequested} hint="Prospects currently at quote requested." />
         <StatCard label="Active campaigns" value={data.activeCampaigns} hint="Campaigns with status Active." />
-        <StatCard label="Mailbox" value={data.mailbox ? 1 : 0} hint={data.mailbox ? `${data.mailbox.email} · ${data.mailbox.connectionStatus}${data.mailbox.lastError ? ` · ${data.mailbox.lastError}` : ""}` : "No Google mailbox connected."} />
+        <StatCard label="Mailbox" value={data.mailbox ? 1 : 0} hint={mailboxHint} />
+        <StatCard label="Store" value={store?.connected ? 1 : 0} hint={storeHint} />
         <StatCard label="Short stock" value={shortStock} hint="Tracked products with nothing left after open quotations and open website orders." />
+        <StatCard label="Products without pictures" value={missingImages} hint="Active products that will publish without a new image update." />
       </div>
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <Panel className="p-5">

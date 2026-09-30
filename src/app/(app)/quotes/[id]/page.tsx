@@ -17,6 +17,8 @@ export default async function QuoteDocumentPage({ params }: { params: Promise<{ 
     description: line.description,
     quantity: Number(line.quantity),
     unitPriceCents: line.unitPriceCents,
+    specifications: line.product?.specifications ?? "",
+    imageUrls: line.product?.imageUrls ?? [],
   }));
   const total = quoteTotalCents(lines);
   return (
@@ -43,7 +45,13 @@ export default async function QuoteDocumentPage({ params }: { params: Promise<{ 
             const amount = lineTotalCents(line.quantity, line.unitPriceCents);
             return (
               <tr key={`${line.description}-${index}`}>
-                <td>{line.description}</td>
+                <td>
+                  <p>{line.description}</p>
+                  {line.specifications.trim() ? <p className="mt-1 whitespace-pre-wrap text-muted">{line.specifications}</p> : null}
+                  {line.imageUrls.map((url) => (
+                    <a key={url} href={url} className="mt-1 block break-all text-accent">{url}</a>
+                  ))}
+                </td>
                 <td>{line.quantity}</td>
                 <td>{formatCents(line.unitPriceCents, quote.currency)}</td>
                 <td>{amount === null ? "—" : formatCents(amount, quote.currency)}</td>

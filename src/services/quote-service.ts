@@ -12,7 +12,7 @@ import type { Actor } from "./types";
 export async function quotesForRfq(workspaceId: string, rfqId: string) {
   return getDb().quote.findMany({
     where: { workspaceId, rfqId },
-    include: { lines: { orderBy: { id: "asc" }, include: { product: { select: { sku: true, name: true } } } } },
+    include: { lines: { orderBy: { id: "asc" }, include: { product: { select: { sku: true, name: true, specifications: true, imageUrls: true } } } } },
     orderBy: { createdAt: "desc" },
   });
 }
@@ -73,7 +73,7 @@ export async function getQuoteDocument(workspaceId: string, id: string) {
   return getDb().quote.findFirst({
     where: { id, workspaceId, number: { not: null } },
     include: {
-      lines: { orderBy: { id: "asc" } },
+      lines: { orderBy: { id: "asc" }, include: { product: { select: { specifications: true, imageUrls: true } } } },
       rfq: { include: { prospect: true, company: true, sourceMessage: true } },
     },
   });
@@ -109,7 +109,7 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
         notes: terms.notes,
         validUntil: quoteValidUntil(issuedAt, terms.validDays),
       },
-      include: { lines: true },
+      include: { lines: { include: { product: { select: { specifications: true, imageUrls: true } } } } },
     });
   });
   if (prepared.number == null || prepared.issuedAt == null || prepared.validUntil == null) {
@@ -130,6 +130,8 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
       description: line.description,
       quantity: Number(line.quantity),
       unitPriceCents: line.unitPriceCents,
+      specifications: line.product?.specifications ?? "",
+      imageUrls: line.product?.imageUrls ?? [],
     })),
   });
   await sendThreadReply(actor, {

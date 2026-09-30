@@ -37,5 +37,19 @@ test("formats a quotation email without marking it sent", () => {
   assert.match(body, /ZAR 5 000\.00/);
   assert.match(body, /Prices exclude delivery/);
   assert.match(body, /not a promotional message/);
+  assert.equal(body.includes("https://"), false);
   assert.equal(body.includes("QUOTE_SENT"), false);
+  const detailed = formatQuoteEmail({
+    subject: "Switches",
+    currency: "ZAR",
+    lines: [{
+      description: "24-port switch",
+      quantity: 1,
+      unitPriceCents: 100,
+      specifications: "24 gigabit ports",
+      imageUrls: ["https://cdn.example/switch.jpg"],
+    }],
+  });
+  assert.match(detailed, /24 gigabit ports/);
+  assert.match(detailed, /https:\/\/cdn\.example\/switch\.jpg/);
 });

@@ -74,7 +74,7 @@ export function formatCents(cents: number, currency = "ZAR") {
 export function formatQuoteEmail(input: {
   subject: string;
   currency: string;
-  lines: { description: string; quantity: number; unitPriceCents: number }[];
+  lines: { description: string; quantity: number; unitPriceCents: number; specifications?: string; imageUrls?: string[] }[];
   number?: number | null;
   issuedAt?: Date;
   validDays?: number;
@@ -90,7 +90,11 @@ export function formatQuoteEmail(input: {
     : `Quotation ${formatQuoteNumber(input.number, issuedAt)}`;
   const rows = input.lines.map((line) => {
     const total = lineTotalCents(line.quantity, line.unitPriceCents) ?? 0;
-    return `${line.description} — qty ${line.quantity} — ${formatCents(line.unitPriceCents, input.currency)} — ${formatCents(total, input.currency)}`;
+    const parts = [`${line.description} — qty ${line.quantity} — ${formatCents(line.unitPriceCents, input.currency)} — ${formatCents(total, input.currency)}`];
+    const specifications = line.specifications?.trim();
+    if (specifications) parts.push(specifications);
+    if (line.imageUrls && line.imageUrls.length > 0) parts.push(line.imageUrls.join("\n"));
+    return parts.join("\n");
   });
   const total = quoteTotalCents(input.lines) ?? 0;
   const body = [

@@ -67,6 +67,8 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
               quantity: Number(line.quantity).toString(),
               unitPriceCents: line.unitPriceCents,
               productId: line.productId,
+              specifications: line.product?.specifications ?? "",
+              imageUrls: line.product?.imageUrls ?? [],
             }))}
             products={products.filter((product) => product.active).map((product) => ({
               id: product.id,

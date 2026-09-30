@@ -7,7 +7,7 @@ import { formatCents, formatQuoteEmail, lineTotalCents, quoteTotalCents } from "
 import { linesExceedingStock } from "@/lib/stock";
 import { initialActionState } from "@/lib/format";
 
-type Line = { id: string; description: string; quantity: string; unitPriceCents: number; productId: string | null };
+type Line = { id: string; description: string; quantity: string; unitPriceCents: number; productId: string | null; specifications: string; imageUrls: string[] };
 type ProductOption = { id: string; sku: string; name: string; unitPrice: string; unitPriceCents: number; costCents: number | null; stockLeft: number };
 
 export function QuotePanel({
@@ -52,7 +52,13 @@ export function QuotePanel({
     customerName,
     companyName,
     notes,
-    lines: lines.map((line) => ({ description: line.description, quantity: Number(line.quantity), unitPriceCents: line.unitPriceCents })),
+    lines: lines.map((line) => ({
+      description: line.description,
+      quantity: Number(line.quantity),
+      unitPriceCents: line.unitPriceCents,
+      specifications: line.specifications,
+      imageUrls: line.imageUrls,
+    })),
   });
 
   return (

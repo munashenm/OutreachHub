@@ -45,7 +45,7 @@ export default async function ProductsPage() {
           <div className="p-4"><EmptyState title="No products yet" description="Add the products Urban Focus quotes. Prices stay on the product until someone changes them." /></div>
         ) : (
           <table className="data-table">
-            <thead><tr><th>SKU</th><th>Name</th><th>Price</th><th>Stock</th><th>Left</th><th>Status</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Name</th><th>Price</th><th>Stock</th><th>Left</th><th>Images</th><th>Status</th></tr></thead>
             <tbody>
               {rows.map((row) => (
                 <tr key={row.product.id}>
@@ -54,6 +54,7 @@ export default async function ProductsPage() {
                   <td>{formatCents(row.product.unitPriceCents, row.product.currency)}</td>
                   <td>{row.product.stockOnHand}</td>
                   <td>{row.left} {row.short ? <Badge tone="amber">Short</Badge> : null}</td>
+                  <td>{row.product.imageUrls.length > 0 ? row.product.imageUrls.length : "—"}</td>
                   <td>{row.product.active ? "Active" : "Inactive"}</td>
                 </tr>
               ))}
