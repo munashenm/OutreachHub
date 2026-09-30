@@ -43,17 +43,26 @@ export function normalizeAppOrigin(value: string | undefined, production: boolea
     throw new AppError("APP_URL must be an absolute URL.", 500, "CONFIG");
   }
   const localhost = url.hostname === "localhost" || url.hostname === "127.0.0.1";
-  if (url.username || url.password || url.search || url.hash || (url.pathname !== "/" && url.pathname !== "")) {
-    throw new AppError("APP_URL must be the site origin only.", 500, "CONFIG");
-  }
+  if (url.username || url.password) throw new AppError("APP_URL must not include a username or password.", 500, "CONFIG");
   if (url.protocol !== "https:" && !(url.protocol === "http:" && localhost && !production)) {
     throw new AppError("APP_URL must use https.", 500, "CONFIG");
   }
   return url.origin;
 }
 
+export function resolveAppOrigin(appUrl: string | undefined, railwayDomain: string | undefined, production: boolean) {
+  const configured = stripWrappingQuotes(appUrl ?? "");
+  const domain = stripWrappingQuotes(railwayDomain ?? "");
+  const value = configured || (production && domain ? `https://${domain}` : undefined);
+  return normalizeAppOrigin(value, production);
+}
+
+export function appOrigin() {
+  return resolveAppOrigin(process.env.APP_URL, process.env.RAILWAY_PUBLIC_DOMAIN, process.env.NODE_ENV === "production");
+}
+
 export function googleRedirectUri() {
-  return `${normalizeAppOrigin(process.env.APP_URL, process.env.NODE_ENV === "production")}/api/google/callback`;
+  return `${appOrigin()}/api/google/callback`;
 }
 
 function googleClientId() {

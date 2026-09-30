@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { googleAuthUrl, googleOauthStateHash, googleOauthStateMatches, normalizeAppOrigin } from "../services/google-service";
+import { googleAuthUrl, googleOauthStateHash, googleOauthStateMatches, normalizeAppOrigin, resolveAppOrigin } from "../services/google-service";
 
 const CLIENT_ID = "123456789012-abcdefghij.apps.googleusercontent.com";
 
@@ -9,10 +9,24 @@ test("builds the production Google redirect from APP_URL", () => {
     normalizeAppOrigin("  \"https://outreachhub-production.up.railway.app/\"  ", true),
     "https://outreachhub-production.up.railway.app",
   );
+  assert.equal(
+    normalizeAppOrigin("https://outreachhub-production.up.railway.app/extra", true),
+    "https://outreachhub-production.up.railway.app",
+  );
   assert.throws(() => normalizeAppOrigin("http://outreachhub-production.up.railway.app", true));
-  assert.throws(() => normalizeAppOrigin("https://outreachhub-production.up.railway.app/extra", true));
   assert.throws(() => normalizeAppOrigin(undefined, true));
   assert.equal(normalizeAppOrigin(undefined, false), "http://localhost:3000");
+});
+
+test("uses the Railway hostname when APP_URL is missing", () => {
+  assert.equal(
+    resolveAppOrigin(undefined, "outreachhub-production.up.railway.app", true),
+    "https://outreachhub-production.up.railway.app",
+  );
+  assert.equal(
+    `${resolveAppOrigin(undefined, "outreachhub-production.up.railway.app", true)}/api/google/callback`,
+    "https://outreachhub-production.up.railway.app/api/google/callback",
+  );
 });
 
 test("creates a web-server Google authorize URL", () => {

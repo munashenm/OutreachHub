@@ -3,8 +3,8 @@ import { AppError } from "@/lib/errors";
 import {
   GOOGLE_OAUTH_STATE_COOKIE,
   googleOauthStateCookieOptions,
+  appOrigin,
   googleOauthStateMatches,
-  normalizeAppOrigin,
 } from "@/services/google-service";
 import { connectMailbox, readMailboxState } from "@/services/mailbox-service";
 
@@ -16,7 +16,7 @@ function finish(location: string) {
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
-  const appUrl = normalizeAppOrigin(process.env.APP_URL, process.env.NODE_ENV === "production");
+  const appUrl = appOrigin();
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const cookie = request.cookies.get(GOOGLE_OAUTH_STATE_COOKIE)?.value;

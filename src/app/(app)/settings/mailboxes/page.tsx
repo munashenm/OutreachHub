@@ -3,6 +3,7 @@ import { disconnectMailboxAction } from "@/actions/template-actions";
 import { ConfirmButton, Notice, PageHeader, Panel, buttonPrimary, buttonSecondary } from "@/components/ui";
 import { firstParam, formatDateTime } from "@/lib/format";
 import { MAILBOX_PROVIDER_LABELS } from "@/lib/labels";
+import { AppError } from "@/lib/errors";
 import { requireSession } from "@/services/auth-service";
 import { GOOGLE_SCOPES, googleRedirectUri } from "@/services/google-service";
 import { listMailboxes } from "@/services/mailbox-service";
@@ -16,6 +17,13 @@ export default async function MailboxesPage({
   const mailboxes = await listMailboxes(session.workspace.id);
   const status = firstParam((await searchParams).status);
   const googleReady = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+  let redirectUri = "";
+  let redirectError = "";
+  try {
+    redirectUri = googleRedirectUri();
+  } catch (error) {
+    redirectError = error instanceof AppError ? error.message : "Set APP_URL to the public https address of this app.";
+  }
   return (
     <div className="space-y-4">
       <PageHeader
@@ -31,8 +39,9 @@ export default async function MailboxesPage({
       {status === "connected" ? <Notice tone="success">Mailbox connected.</Notice> : null}
       {status === "denied" || status === "error" ? <Notice tone="error">The mailbox connection did not finish. Check the OAuth client and try again.</Notice> : null}
       {!googleReady ? <Notice tone="info">Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and OAUTH_ENCRYPTION_KEY before connecting the mailbox.</Notice> : null}
+      {redirectError ? <Notice tone="error">{redirectError}</Notice> : null}
       <Panel className="space-y-2 p-5 text-sm">
-        <p>Google redirect URI: <span className="font-medium">{googleRedirectUri()}</span></p>
+        <p>Google redirect URI: <span className="font-medium">{redirectUri || "Not configured"}</span></p>
         <p className="text-muted">Gmail scopes: {GOOGLE_SCOPES}</p>
       </Panel>
       <Panel>
