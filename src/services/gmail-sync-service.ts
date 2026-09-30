@@ -27,6 +27,10 @@ export async function syncConnectedGmail() {
       const synced = await syncGmailMailbox(mailbox.id, mailbox.workspaceId);
       results.push({ email: mailbox.email, synced });
     } catch (error) {
+      if (error instanceof AppError && error.code === "SYNC_IN_PROGRESS") {
+        results.push({ email: mailbox.email, synced: 0 });
+        continue;
+      }
       const message = error instanceof Error ? error.message.slice(0, 300) : "Sync failed.";
       results.push({ email: mailbox.email, error: message });
     }
@@ -37,6 +41,9 @@ export async function syncConnectedGmail() {
 export async function syncGmailMailbox(mailboxId: string, workspaceId: string) {
   const mailbox = await getDb().mailbox.findFirst({ where: { id: mailboxId, workspaceId, provider: "GOOGLE" } });
   if (!mailbox) throw new AppError("Mailbox not found.", 404, "NOT_FOUND");
+  const claimed = await claimSyncLease(mailbox.id, workspaceId);
+  if (!claimed) throw new AppError("A Gmail sync is already running for this mailbox.", 409, "SYNC_IN_PROGRESS");
+  try {
   let access: { token: string; email: string };
   try {
     access = await accessTokenForMailbox(mailbox.id, workspaceId);
@@ -92,9 +99,29 @@ export async function syncGmailMailbox(mailboxId: string, workspaceId: string) {
       lastInboundSyncAt: new Date(),
       lastError: null,
       connectionStatus: "CONNECTED",
+      syncLeaseUntil: null,
     },
   });
   return synced;
+  } finally {
+    await getDb().mailbox.updateMany({
+      where: { id: mailbox.id, workspaceId },
+      data: { syncLeaseUntil: null },
+    });
+  }
+}
+
+async function claimSyncLease(mailboxId: string, workspaceId: string) {
+  const now = new Date();
+  const claimed = await getDb().mailbox.updateMany({
+    where: {
+      id: mailboxId,
+      workspaceId,
+      OR: [{ syncLeaseUntil: null }, { syncLeaseUntil: { lt: now } }],
+    },
+    data: { syncLeaseUntil: new Date(now.getTime() + 10 * 60 * 1000) },
+  });
+  return claimed.count === 1;
 }
 
 async function ingestGmailMessage(input: { accessToken: string; workspaceId: string; mailboxEmail: string; externalId: string }) {

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { disconnectMailboxAction } from "@/actions/template-actions";
+import { SyncMailboxButton } from "@/components/sync-mailbox-button";
 import { ConfirmButton, Notice, PageHeader, Panel, buttonPrimary, buttonSecondary } from "@/components/ui";
 import { firstParam, formatDateTime } from "@/lib/format";
 import { MAILBOX_PROVIDER_LABELS } from "@/lib/labels";
@@ -17,6 +18,7 @@ export default async function MailboxesPage({
   const mailboxes = await listMailboxes(session.workspace.id);
   const status = firstParam((await searchParams).status);
   const googleReady = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+  const canSync = session.role === "OWNER" || session.role === "ADMIN";
   let redirectUri = "";
   let redirectError = "";
   try {
@@ -62,7 +64,12 @@ export default async function MailboxesPage({
                   <td>{mailbox.lastError || "—"}</td>
                   <td>{mailbox.lastSuccessfulSendAt ? formatDateTime(mailbox.lastSuccessfulSendAt) : "—"}</td>
                   <td>{mailbox.lastInboundSyncAt ? formatDateTime(mailbox.lastInboundSyncAt) : "—"}</td>
-                  <td><ConfirmButton action={disconnectMailboxAction.bind(null, mailbox.id)} label="Disconnect" confirm={`Disconnect ${mailbox.email}?`} variant="secondary" /></td>
+                  <td>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {canSync && mailbox.provider === "GOOGLE" ? <SyncMailboxButton mailboxId={mailbox.id} /> : null}
+                      <ConfirmButton action={disconnectMailboxAction.bind(null, mailbox.id)} label="Disconnect" confirm={`Disconnect ${mailbox.email}?`} variant="secondary" />
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

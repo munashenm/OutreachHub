@@ -32,4 +32,4 @@ This service is the Urban Focus store. Set `DATABASE_URL`, `SESSION_SECRET`, `AP
 
 After the first deploy, open `/register` and create the staff account. The workspace name is Urban Focus. Registration closes after that account exists. Then connect `sales@urbanfocus.co.za` under Settings → Mailboxes.
 
-Schedule `POST /api/cron/gmail-sync`, `POST /api/cron/send`, and `POST /api/cron/stock-sync` with `Authorization: Bearer $CRON_SECRET`.
+Keep the web service start command as `npm start` with no cron schedule. Add three more Railway services, each with the same `APP_URL` and `CRON_SECRET` as the web service. `railway.gmail-sync.toml` runs `npm run cron:gmail-sync` every 15 minutes. `railway.send.toml` runs `npm run cron:send` every 15 minutes. `railway.stock-sync.toml` runs `npm run cron:stock-sync` once an hour. Each command posts to its `/api/cron/` route with `Authorization: Bearer $CRON_SECRET` and exits.

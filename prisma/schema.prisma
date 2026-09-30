@@ -374,6 +374,7 @@ model Mailbox {
   lastError              String?
   lastSuccessfulSendAt   DateTime?
   lastInboundSyncAt      DateTime?
+  syncLeaseUntil         DateTime?
   createdAt              DateTime        @default(now())
   updatedAt              DateTime        @updatedAt
 

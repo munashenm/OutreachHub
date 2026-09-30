@@ -1,0 +1,10 @@
+# Separate Railway service. Do not attach this file to the web service.
+# Web service start command stays `npm start` with no cron schedule.
+
+[build]
+buildCommand = "echo Campaign send runner"
+
+[deploy]
+startCommand = "npm run cron:send"
+cronSchedule = "*/15 * * * *"
+restartPolicyType = "NEVER"

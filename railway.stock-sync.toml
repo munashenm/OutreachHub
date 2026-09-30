@@ -1,0 +1,10 @@
+# Separate Railway service. Do not attach this file to the web service.
+# Web service start command stays `npm start` with no cron schedule.
+
+[build]
+buildCommand = "echo Stock sync runner"
+
+[deploy]
+startCommand = "npm run cron:stock-sync"
+cronSchedule = "5 * * * *"
+restartPolicyType = "NEVER"
