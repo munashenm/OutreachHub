@@ -469,6 +469,8 @@ model Product {
   sku            String
   name           String
   description    String   @default("")
+  specifications String   @default("")
+  imageUrls      String[] @default([])
   unitPriceCents Int
   currency       String   @default("ZAR")
   active         Boolean  @default(true)

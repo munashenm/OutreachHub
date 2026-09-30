@@ -211,6 +211,8 @@ export const productSchema = z.object({
   sku: requiredText(60, "SKU"),
   name: requiredText(160, "Product name"),
   description: z.string().trim().max(4000).optional().default(""),
+  specifications: z.string().trim().max(8000).optional().default(""),
+  imageUrls: z.string().trim().max(4000).optional().default(""),
   unitPrice: requiredText(20, "Unit price"),
   active: z.enum(["true", "false"]).optional().default("true"),
 });

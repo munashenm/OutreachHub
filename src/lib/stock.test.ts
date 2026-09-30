@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertPublicHttpsUrl, isShortStock, linesExceedingStock, markedUpCents, parseSupplierStockBody, priceAllowedByMargin, stockLeft, stockLevel } from "./stock";
+import { assertPublicHttpsUrl, isShortStock, linesExceedingStock, markedUpCents, parseProductImageUrls, parseSupplierStockBody, priceAllowedByMargin, stockLeft, stockLevel } from "./stock";
 
 test("adds a percentage markup to a supplier cost", () => {
   assert.equal(markedUpCents(10000, 15), 11500);
@@ -62,4 +62,13 @@ test("accepts a public https feed and rejects a private address", () => {
   assert.throws(() => assertPublicHttpsUrl("http://supplier.example/stock"));
   assert.throws(() => assertPublicHttpsUrl("https://127.0.0.1/stock"));
   assert.throws(() => assertPublicHttpsUrl("https://10.0.0.5/stock"));
+});
+
+test("reads public product image addresses and skips blanks", () => {
+  assert.deepEqual(parseProductImageUrls("https://cdn.example/a.jpg\n\nhttps://cdn.example/a.jpg\nhttps://cdn.example/b.jpg"), [
+    "https://cdn.example/a.jpg",
+    "https://cdn.example/b.jpg",
+  ]);
+  assert.throws(() => parseProductImageUrls("http://cdn.example/a.jpg"));
+  assert.throws(() => parseProductImageUrls(Array.from({ length: 9 }, (_, index) => `https://cdn.example/${index}.jpg`).join("\n")));
 });

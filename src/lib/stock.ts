@@ -20,6 +20,17 @@ export function assertPublicHttpsUrl(value: string) {
   return url;
 }
 
+export function parseProductImageUrls(value: string) {
+  const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length > 8) throw new Error("Add up to 8 image addresses.");
+  const urls: string[] = [];
+  for (const line of lines) {
+    const address = assertPublicHttpsUrl(line).href;
+    if (!urls.includes(address)) urls.push(address);
+  }
+  return urls;
+}
+
 export function priceAllowedByMargin(costCents: number, sellCents: number, minimumMarginPercent: number) {
   if (!Number.isInteger(minimumMarginPercent) || minimumMarginPercent <= 0) return true;
   if (!Number.isInteger(costCents) || costCents <= 0) return true;

@@ -12,7 +12,7 @@ export function ProductForm({
 }: {
   mode: "create" | "edit";
   id?: string;
-  initial?: { sku: string; name: string; description: string; unitPrice: string; active: boolean };
+  initial?: { sku: string; name: string; description: string; specifications: string; imageUrls: string; unitPrice: string; active: boolean };
 }) {
   const action = mode === "create" ? createProductAction : updateProductAction;
   const [state, formAction, pending] = useActionState(action, initialActionState);
@@ -40,6 +40,17 @@ export function ProductForm({
         <Field label="Description" name="description">
           <textarea id="description" name="description" defaultValue={initial?.description} className={textAreaClass} />
         </Field>
+      </div>
+      <div className="md:col-span-2">
+        <Field label="Specifications" name="specifications">
+          <textarea id="specifications" name="specifications" defaultValue={initial?.specifications} className={textAreaClass} />
+        </Field>
+      </div>
+      <div className="md:col-span-2">
+        <Field label="Image addresses" name="imageUrls" error={state.fieldErrors?.imageUrls}>
+          <textarea id="imageUrls" name="imageUrls" defaultValue={initial?.imageUrls} placeholder="https://www.urbanfocus.co.za/images/product.jpg" className={textAreaClass} />
+        </Field>
+        <p className="mt-1 text-xs text-muted">One public https address per line, up to 8. Leave this blank to keep pictures already on the website.</p>
       </div>
       <button className={buttonPrimary} disabled={pending}>{pending ? "Saving..." : "Save product"}</button>
     </form>

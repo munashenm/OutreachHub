@@ -62,6 +62,8 @@ export default async function EditProductPage({
             sku: product.sku,
             name: product.name,
             description: product.description,
+            specifications: product.specifications,
+            imageUrls: product.imageUrls.join("\n"),
             unitPrice: centsToInput(product.unitPriceCents),
             active: product.active,
           }}

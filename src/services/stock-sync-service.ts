@@ -186,8 +186,9 @@ export async function pushStoreStock(workspaceId: string) {
         await loaded.provider.updateContent(matchedSku, {
           name: product.name,
           description: product.description,
-          specifications: "",
+          specifications: product.specifications,
         });
+        if (product.imageUrls.length > 0) await loaded.provider.updateImages(matchedSku, product.imageUrls);
         await loaded.provider.setPublished(matchedSku, product.active);
         if (priceAllowed) await loaded.provider.updatePrice(matchedSku, product.unitPriceCents, product.currency);
         else pricesHeld += 1;
@@ -234,17 +235,17 @@ async function findStoreSku(provider: { findProductBySku(sku: string): Promise<{
   return null;
 }
 
-function catalogPayload(product: { sku: string; name: string; description: string; unitPriceCents: number; currency: string; active: boolean }, stockQuantity: number): StoreCatalogProduct {
+function catalogPayload(product: { sku: string; name: string; description: string; specifications: string; imageUrls: string[]; unitPriceCents: number; currency: string; active: boolean }, stockQuantity: number): StoreCatalogProduct {
   return {
     sku: product.sku,
     name: product.name,
     description: product.description,
-    specifications: "",
+    specifications: product.specifications,
     unitPriceCents: product.unitPriceCents,
     currency: product.currency,
     stockQuantity,
     published: product.active,
-    imageUrls: [],
+    imageUrls: product.imageUrls,
   };
 }
 

@@ -2,6 +2,7 @@ import { Prisma } from "../generated/prisma/client";
 import { getDb, isUniqueViolation } from "../lib/db";
 import { AppError } from "../lib/errors";
 import { parseMoneyToCents } from "../lib/quote";
+import { parseProductImageUrls } from "../lib/stock";
 import type { ProductInput } from "../lib/validators";
 import { recordActivity } from "./activity-service";
 import type { Actor } from "./types";
@@ -10,6 +11,14 @@ function price(input: ProductInput) {
   const cents = parseMoneyToCents(input.unitPrice);
   if (cents === null) throw new AppError("Enter a unit price in rands, such as 1299.50.");
   return cents;
+}
+
+function images(input: ProductInput) {
+  try {
+    return parseProductImageUrls(input.imageUrls);
+  } catch (error) {
+    throw new AppError(error instanceof Error ? error.message : "Enter public https image addresses.");
+  }
 }
 
 export async function listProducts(workspaceId: string) {
@@ -32,6 +41,8 @@ export async function createProduct(actor: Actor, input: ProductInput) {
           sku: input.sku,
           name: input.name,
           description: input.description,
+          specifications: input.specifications,
+          imageUrls: images(input),
           unitPriceCents: price(input),
           active: input.active === "true",
         },
@@ -60,6 +71,8 @@ export async function updateProduct(actor: Actor, id: string, input: ProductInpu
         sku: input.sku,
         name: input.name,
         description: input.description,
+        specifications: input.specifications,
+        imageUrls: images(input),
         unitPriceCents: price(input),
         active: input.active === "true",
       },
