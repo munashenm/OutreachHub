@@ -42,11 +42,18 @@ export default async function SettingsPage({
         </div>
       </Panel>
       <Panel className="p-5">
-        <h2 className="font-semibold">Urban Focus website</h2>
-        <p className="mt-1 mb-4 text-sm text-muted">WooCommerce on www.urbanfocus.co.za. Stock and the marked-up price are sent for catalogue SKUs that already exist on the website.</p>
-        {store?.lastError ? <p className="mb-3 text-sm text-red-700">{store.lastError}</p> : null}
-        {store?.lastSyncAt ? <p className="mb-3 text-sm text-muted">Last website update {formatDateTime(store.lastSyncAt)}</p> : null}
-        <StoreConnectionForm baseUrl={store?.baseUrl ?? ""} connected={store?.connected ?? false} />
+        <h2 className="font-semibold">Store integration</h2>
+        <p className="mt-1 mb-4 text-sm text-muted">OutreachHub publishes the catalogue to the Urban Focus store. Supplier feeds stay separate and cannot set a sell price below the minimum margin.</p>
+        <p className="mb-3 text-sm">Connection status: {store?.status ?? "Not connected"}</p>
+        {store?.lastError ? <p className="mb-3 text-sm text-red-700">Last error: {store.lastError}</p> : null}
+        <p className="mb-3 text-sm text-muted">Last successful sync: {store?.lastSyncAt ? formatDateTime(store.lastSyncAt) : "None yet"}</p>
+        <StoreConnectionForm
+          storeName={store?.storeName ?? ""}
+          storeUrl={store?.storeUrl ?? ""}
+          apiBaseUrl={store?.apiBaseUrl ?? ""}
+          minimumMarginPercent={store?.minimumMarginPercent ?? 0}
+          connected={store?.connected ?? false}
+        />
       </Panel>
       <Panel className="p-5 text-sm">
         <Link className="text-accent" href="/settings/mailboxes">Mailboxes</Link>

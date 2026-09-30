@@ -18,7 +18,7 @@ export default async function OrdersPage() {
       />
       <Panel>
         {orders.length === 0 ? (
-          <div className="p-4"><EmptyState title="No website orders yet" description="Connect the website under Settings, then sync orders." /></div>
+          <div className="p-4"><EmptyState title="No website orders yet" description="Connect the store under Settings, then sync orders." /></div>
         ) : (
           <table className="data-table">
             <thead><tr><th>Order</th><th>Customer</th><th>Email</th><th>Items</th><th>Total</th><th>Status</th><th>Placed</th><th></th></tr></thead>

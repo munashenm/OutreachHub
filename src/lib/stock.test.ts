@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertPublicHttpsUrl, isShortStock, linesExceedingStock, markedUpCents, parseSupplierStockBody, stockLeft, stockLevel } from "./stock";
+import { assertPublicHttpsUrl, isShortStock, linesExceedingStock, markedUpCents, parseSupplierStockBody, priceAllowedByMargin, stockLeft, stockLevel } from "./stock";
 
 test("adds a percentage markup to a supplier cost", () => {
   assert.equal(markedUpCents(10000, 15), 11500);
   assert.equal(markedUpCents(89900, 0), 89900);
   assert.equal(markedUpCents(10000, -1), null);
+});
+
+test("keeps a supplier price that is below the minimum margin off the store", () => {
+  assert.equal(priceAllowedByMargin(8000, 10000, 25), false);
+  assert.equal(priceAllowedByMargin(8000, 10000, 20), true);
+  assert.equal(priceAllowedByMargin(8000, 10000, 0), true);
 });
 
 test("sums supplier quantities into a stock level", () => {

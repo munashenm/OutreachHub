@@ -3,7 +3,7 @@ import { AppError } from "../lib/errors";
 import { parseStoreOrders } from "../lib/store-order";
 import { recordActivity } from "./activity-service";
 import { createProspect } from "./prospect-service";
-import { queueStockForWebsite, storeGet } from "./stock-sync-service";
+import { fetchStoreOrders, queueStockForWebsite } from "./stock-sync-service";
 import type { Actor } from "./types";
 
 export async function getStoreOrder(workspaceId: string, id: string) {
@@ -26,12 +26,7 @@ export async function listStoreOrders(workspaceId: string) {
 }
 
 export async function pullStoreOrders(actor: Actor) {
-  const body = await storeGet(actor.workspaceId, "/wp-json/wc/v3/orders", {
-    per_page: "40",
-    orderby: "date",
-    order: "desc",
-    status: "pending,processing,on-hold,completed",
-  });
+  const body = await fetchStoreOrders(actor.workspaceId);
   const parsed = parseStoreOrders(body);
   if (parsed.error) throw new AppError(parsed.error);
   const emails = [...new Set(parsed.orders.map((order) => order.email))];
@@ -148,7 +143,7 @@ export async function createProspectFromOrder(actor: Actor, orderId: string) {
 
 export async function pullAllStoreOrders() {
   const workspaces = await getDb().workspace.findMany({
-    where: { storeBaseUrl: { not: null }, storeKeyEncrypted: { not: null }, storeSecretEncrypted: { not: null } },
+    where: { storeName: { not: null }, storePublicUrl: { not: null }, storeBaseUrl: { not: null }, storeKeyEncrypted: { not: null } },
     select: { id: true },
   });
   const results = [];

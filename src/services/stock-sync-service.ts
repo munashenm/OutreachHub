@@ -1,9 +1,9 @@
 import { getDb, type DbClient } from "../lib/db";
 import { AppError } from "../lib/errors";
-import { centsToInput } from "./product-service";
-import { assertPublicHttpsUrl, markedUpCents, parseSupplierStockBody, stockLeft, stockLevel } from "../lib/stock";
+import { assertPublicHttpsUrl, markedUpCents, parseSupplierStockBody, priceAllowedByMargin, stockLeft, stockLevel } from "../lib/stock";
 import { decryptSecret, encryptSecret } from "../lib/token-crypto";
 import { recordActivity } from "./activity-service";
+import { createStoreProvider, type StoreCatalogProduct } from "./store";
 import type { Actor } from "./types";
 
 const BATCH = 40;
@@ -46,85 +46,206 @@ export async function syncSupplierFeed(actor: Actor, supplierId: string) {
 export async function getStoreConnection(workspaceId: string) {
   const workspace = await getDb().workspace.findFirst({
     where: { id: workspaceId },
-    select: { storeBaseUrl: true, storeKeyEncrypted: true, storeSecretEncrypted: true, storeLastSyncAt: true, storeLastError: true },
+    select: {
+      storeName: true,
+      storePublicUrl: true,
+      storeBaseUrl: true,
+      storeKeyEncrypted: true,
+      minimumMarginPercent: true,
+      storeLastSyncAt: true,
+      storeLastError: true,
+    },
   });
   if (!workspace) return null;
+  const connected = Boolean(workspace.storeName && workspace.storePublicUrl && workspace.storeBaseUrl && workspace.storeKeyEncrypted);
   return {
-    baseUrl: workspace.storeBaseUrl ?? "",
-    connected: Boolean(workspace.storeBaseUrl && workspace.storeKeyEncrypted && workspace.storeSecretEncrypted),
+    storeName: workspace.storeName ?? "",
+    storeUrl: workspace.storePublicUrl ?? "",
+    apiBaseUrl: workspace.storeBaseUrl ?? "",
+    minimumMarginPercent: workspace.minimumMarginPercent,
+    connected,
+    status: !connected ? "Not connected" : workspace.storeLastError ? "Error" : "Connected",
     lastSyncAt: workspace.storeLastSyncAt,
     lastError: workspace.storeLastError,
   };
 }
 
-export async function saveStoreConnection(actor: Actor, input: { storeBaseUrl: string; consumerKey: string; consumerSecret: string }) {
+export async function saveStoreConnection(actor: Actor, input: {
+  storeName: string;
+  storeUrl: string;
+  apiBaseUrl: string;
+  apiKey: string;
+  minimumMarginPercent: number;
+}) {
   const workspace = await getDb().workspace.findFirst({
     where: { id: actor.workspaceId },
-    select: { id: true, storeKeyEncrypted: true, storeSecretEncrypted: true },
+    select: { id: true, storeKeyEncrypted: true },
   });
   if (!workspace) throw new AppError("Workspace not found.", 404, "NOT_FOUND");
-  const url = input.storeBaseUrl.trim();
-  if (url) publicUrl(url);
-  const storeKeyEncrypted = input.consumerKey.trim() ? sealKey(input.consumerKey.trim()) : workspace.storeKeyEncrypted;
-  const storeSecretEncrypted = input.consumerSecret.trim() ? sealKey(input.consumerSecret.trim()) : workspace.storeSecretEncrypted;
-  if (url && (!storeKeyEncrypted || !storeSecretEncrypted)) throw new AppError("Enter the WooCommerce consumer key and secret.");
+  const storeName = input.storeName.trim();
+  const storeUrl = input.storeUrl.trim();
+  const apiBaseUrl = input.apiBaseUrl.trim();
+  if (storeUrl) publicUrl(storeUrl);
+  if (apiBaseUrl) publicUrl(apiBaseUrl);
+  const storeKeyEncrypted = input.apiKey.trim() ? sealKey(input.apiKey.trim()) : workspace.storeKeyEncrypted;
+  const clearing = !storeName && !storeUrl && !apiBaseUrl;
+  if (!clearing && (!storeName || !storeUrl || !apiBaseUrl || !storeKeyEncrypted)) {
+    throw new AppError("Enter the store name, store URL, API base URL, and API key.");
+  }
   await getDb().workspace.update({
     where: { id: workspace.id },
     data: {
-      storeBaseUrl: url || null,
-      storeKeyEncrypted: url ? storeKeyEncrypted : null,
-      storeSecretEncrypted: url ? storeSecretEncrypted : null,
+      storeName: clearing ? null : storeName,
+      storePublicUrl: clearing ? null : storeUrl,
+      storeBaseUrl: clearing ? null : apiBaseUrl,
+      storeProvider: "urban-focus",
+      storeKeyEncrypted: clearing ? null : storeKeyEncrypted,
+      storeSecretEncrypted: null,
+      minimumMarginPercent: input.minimumMarginPercent,
       storeLastError: null,
     },
   });
 }
 
-export async function pushStoreStock(workspaceId: string) {
+async function storeProviderFor(workspaceId: string) {
   const workspace = await getDb().workspace.findFirst({
     where: { id: workspaceId },
-    select: { id: true, storeBaseUrl: true, storeKeyEncrypted: true, storeSecretEncrypted: true, storeLastSyncAt: true },
+    select: {
+      id: true,
+      storeName: true,
+      storePublicUrl: true,
+      storeBaseUrl: true,
+      storeProvider: true,
+      storeKeyEncrypted: true,
+      minimumMarginPercent: true,
+      storeLastSyncAt: true,
+    },
   });
-  if (!workspace?.storeBaseUrl || !workspace.storeKeyEncrypted || !workspace.storeSecretEncrypted) {
-    return { pushed: 0, missing: 0, pending: false };
+  if (!workspace?.storeName || !workspace.storePublicUrl || !workspace.storeBaseUrl || !workspace.storeKeyEncrypted) {
+    return null;
   }
-  const key = decryptSecret(workspace.storeKeyEncrypted);
-  const secret = decryptSecret(workspace.storeSecretEncrypted);
+  return {
+    workspace,
+    provider: createStoreProvider(workspace.storeProvider, {
+      apiBaseUrl: workspace.storeBaseUrl,
+      token: decryptSecret(workspace.storeKeyEncrypted),
+    }),
+  };
+}
+
+export async function testStoreConnection(workspaceId: string) {
+  const loaded = await storeProviderFor(workspaceId);
+  if (!loaded) throw new AppError("Save the store connection before testing it.");
+  try {
+    await loaded.provider.testConnection();
+    await getDb().workspace.update({ where: { id: loaded.workspace.id }, data: { storeLastError: null } });
+  } catch (error) {
+    const message = error instanceof AppError ? error.message : "The store connection test failed.";
+    await getDb().workspace.update({ where: { id: loaded.workspace.id }, data: { storeLastError: message.slice(0, 300) } });
+    throw error instanceof AppError ? error : new AppError(message);
+  }
+}
+
+export async function fetchStoreOrders(workspaceId: string) {
+  const loaded = await storeProviderFor(workspaceId);
+  if (!loaded) throw new AppError("Connect the store under Settings before syncing orders.");
+  return loaded.provider.listOrders(40);
+}
+
+export async function pushStoreStock(workspaceId: string) {
+  const loaded = await storeProviderFor(workspaceId);
+  if (!loaded) return { pushed: 0, pricesHeld: 0, pending: false };
   const products = await getDb().product.findMany({
-    where: { workspaceId, active: true, updatedAt: { gt: workspace.storeLastSyncAt ?? new Date(0) } },
+    where: { workspaceId, updatedAt: { gt: loaded.workspace.storeLastSyncAt ?? new Date(0) } },
     orderBy: { updatedAt: "asc" },
     take: BATCH,
   });
+  const productIds = products.map((product) => product.id);
+  const costs = await lowestCostByProduct(workspaceId, productIds);
+  const alternateSkus = await supplierSkusByProduct(workspaceId, productIds);
   let pushed = 0;
-  let missing = 0;
-  let cursor = workspace.storeLastSyncAt;
+  let pricesHeld = 0;
+  let cursor = loaded.workspace.storeLastSyncAt;
   const reserved = await reservedByProduct(workspaceId);
   try {
     for (const product of products) {
-      const found = await wooProductId(workspace.storeBaseUrl, key, secret, product.sku);
-      if (!found) {
-        missing += 1;
-        cursor = product.updatedAt;
-        continue;
-      }
       const available = stockLeft(product.stockOnHand, reserved.get(product.id) ?? 0);
-      await wooUpdate(workspace.storeBaseUrl, key, secret, found, available, product.unitPriceCents);
+      const cost = costs.get(product.id) ?? 0;
+      const priceAllowed = priceAllowedByMargin(cost, product.unitPriceCents, loaded.workspace.minimumMarginPercent);
+      const payload = catalogPayload(product, available);
+      const matchedSku = await findStoreSku(loaded.provider, product.sku, alternateSkus.get(product.id) ?? []);
+      if (!matchedSku) {
+        if (!priceAllowed) {
+          pricesHeld += 1;
+          cursor = product.updatedAt;
+          continue;
+        }
+        await loaded.provider.createProduct(payload);
+      } else {
+        await loaded.provider.updateStock(matchedSku, available);
+        await loaded.provider.updateContent(matchedSku, {
+          name: product.name,
+          description: product.description,
+          specifications: "",
+        });
+        await loaded.provider.setPublished(matchedSku, product.active);
+        if (priceAllowed) await loaded.provider.updatePrice(matchedSku, product.unitPriceCents, product.currency);
+        else pricesHeld += 1;
+      }
       pushed += 1;
       cursor = product.updatedAt;
     }
     await getDb().workspace.update({
-      where: { id: workspace.id },
+      where: { id: loaded.workspace.id },
       data: { storeLastSyncAt: cursor, storeLastError: null },
     });
   } catch (error) {
-    const message = error instanceof AppError ? error.message : "The website did not accept the stock update.";
+    const message = error instanceof AppError ? error.message : "The store did not accept the catalogue update.";
     await getDb().workspace.update({
-      where: { id: workspace.id },
+      where: { id: loaded.workspace.id },
       data: { storeLastSyncAt: cursor, storeLastError: message.slice(0, 300) },
     });
     throw error instanceof AppError ? error : new AppError(message);
   }
-  const pending = products.length === BATCH;
-  return { pushed, missing, pending };
+  return { pushed, pricesHeld, pending: products.length === BATCH };
+}
+
+async function supplierSkusByProduct(workspaceId: string, productIds: string[]) {
+  const grouped = new Map<string, string[]>();
+  if (productIds.length === 0) return grouped;
+  const rows = await getDb().supplierPrice.findMany({
+    where: { workspaceId, productId: { in: productIds } },
+    select: { productId: true, supplierSku: true },
+  });
+  for (const row of rows) {
+    const list = grouped.get(row.productId) ?? [];
+    list.push(row.supplierSku);
+    grouped.set(row.productId, list);
+  }
+  return grouped;
+}
+
+async function findStoreSku(provider: { findProductBySku(sku: string): Promise<{ sku: string } | null> }, sku: string, alternates: string[]) {
+  const keys = [sku, ...alternates.filter((item) => item.toLowerCase() !== sku.toLowerCase())];
+  for (const key of keys) {
+    const found = await provider.findProductBySku(key);
+    if (found) return found.sku;
+  }
+  return null;
+}
+
+function catalogPayload(product: { sku: string; name: string; description: string; unitPriceCents: number; currency: string; active: boolean }, stockQuantity: number): StoreCatalogProduct {
+  return {
+    sku: product.sku,
+    name: product.name,
+    description: product.description,
+    specifications: "",
+    unitPriceCents: product.unitPriceCents,
+    currency: product.currency,
+    stockQuantity,
+    published: product.active,
+    imageUrls: [],
+  };
 }
 
 export async function supplierTrackedProductIds(workspaceId: string) {
@@ -231,7 +352,32 @@ export async function syncAllStockFeeds() {
   return { results, stores };
 }
 
+async function lowestCostByProduct(workspaceId: string, productIds: string[]) {
+  const costs = new Map<string, number>();
+  if (productIds.length === 0) return costs;
+  const rows = await getDb().supplierPrice.findMany({
+    where: { workspaceId, productId: { in: productIds }, costCents: { gt: 0 } },
+    select: { productId: true, costCents: true, stockQty: true },
+  });
+  const inStock = new Map<string, number>();
+  for (const row of rows) {
+    const current = costs.get(row.productId);
+    if (current === undefined || row.costCents < current) costs.set(row.productId, row.costCents);
+    if (row.stockQty > 0) {
+      const stocked = inStock.get(row.productId);
+      if (stocked === undefined || row.costCents < stocked) inStock.set(row.productId, row.costCents);
+    }
+  }
+  for (const [productId, cost] of inStock) costs.set(productId, cost);
+  return costs;
+}
+
 async function applyFeed(actor: Actor, supplierId: string, items: { sku: string; costCents: number | null; stockQty: number }[]) {
+  const margin = await getDb().workspace.findFirst({
+    where: { id: actor.workspaceId },
+    select: { minimumMarginPercent: true },
+  });
+  const minimumMarginPercent = margin?.minimumMarginPercent ?? 0;
   const products = await getDb().product.findMany({
     where: { workspaceId: actor.workspaceId },
     select: { id: true, sku: true },
@@ -244,6 +390,7 @@ async function applyFeed(actor: Actor, supplierId: string, items: { sku: string;
   for (const link of links) bySku.set(link.supplierSku.toLowerCase(), link.productId);
   const touched = new Set<string>();
   let unmatched = 0;
+  let pricesHeld = 0;
   for (const item of items) {
     const productId = bySku.get(item.sku.toLowerCase());
     if (!productId) {
@@ -280,11 +427,13 @@ async function applyFeed(actor: Actor, supplierId: string, items: { sku: string;
       return lowest;
     }, null);
     const unitPriceCents = best ? markedUpCents(best.costCents, best.supplier.markupPercent) : null;
+    const publishPrice = unitPriceCents !== null && best !== null && priceAllowedByMargin(best.costCents, unitPriceCents, minimumMarginPercent);
+    if (unitPriceCents !== null && !publishPrice) pricesHeld += 1;
     await getDb().product.update({
       where: { id: productId },
       data: {
         stockOnHand: stockLevel(rows.map((row) => row.stockQty)),
-        ...(unitPriceCents === null ? {} : { unitPriceCents }),
+        ...(publishPrice && unitPriceCents !== null ? { unitPriceCents } : {}),
       },
     });
   }
@@ -296,7 +445,7 @@ async function applyFeed(actor: Actor, supplierId: string, items: { sku: string;
       summary: `Updated stock for ${touched.size} products.`,
     });
   }
-  return { updated: touched.size, unmatched };
+  return { updated: touched.size, unmatched, pricesHeld };
 }
 
 async function readFeed(url: string, encryptedKey: string | null) {
@@ -306,58 +455,6 @@ async function readFeed(url: string, encryptedKey: string | null) {
   if (response.status >= 300 && response.status < 400) throw new AppError("The supplier feed must not redirect.");
   if (!response.ok) throw new AppError(`The supplier feed returned ${response.status}.`);
   return parseSupplierStockBody(await response.json());
-}
-
-async function wooProductId(baseUrl: string, key: string, secret: string, sku: string) {
-  const url = new URL("/wp-json/wc/v3/products", publicUrl(baseUrl));
-  url.searchParams.set("sku", sku);
-  const response = await wooFetch(url, key, secret);
-  const body = await response.json() as { id?: number }[];
-  return Array.isArray(body) ? body.find((item) => item.id)?.id ?? null : null;
-}
-
-async function wooUpdate(baseUrl: string, key: string, secret: string, productId: number, stockOnHand: number, unitPriceCents: number) {
-  const url = new URL(`/wp-json/wc/v3/products/${productId}`, publicUrl(baseUrl));
-  await wooFetch(url, key, secret, {
-    method: "PUT",
-    body: JSON.stringify({
-      manage_stock: true,
-      stock_quantity: stockOnHand,
-      stock_status: stockOnHand > 0 ? "instock" : "outofstock",
-      regular_price: centsToInput(unitPriceCents),
-    }),
-  });
-}
-
-async function wooFetch(url: URL, key: string, secret: string, init?: RequestInit) {
-  const response = await fetch(url, {
-    ...init,
-    redirect: "manual",
-    signal: AbortSignal.timeout(20000),
-    headers: {
-      accept: "application/json",
-      "content-type": "application/json",
-      authorization: `Basic ${Buffer.from(`${key}:${secret}`).toString("base64")}`,
-    },
-  });
-  if (response.status === 401 || response.status === 403) throw new AppError("The website rejected the WooCommerce API keys.");
-  if (response.status >= 300 && response.status < 400) throw new AppError("The website address must not redirect.");
-  if (!response.ok) throw new AppError(`The website returned ${response.status}.`);
-  return response;
-}
-
-export async function storeGet(workspaceId: string, path: string, search: Record<string, string>) {
-  const workspace = await getDb().workspace.findFirst({
-    where: { id: workspaceId },
-    select: { storeBaseUrl: true, storeKeyEncrypted: true, storeSecretEncrypted: true },
-  });
-  if (!workspace?.storeBaseUrl || !workspace.storeKeyEncrypted || !workspace.storeSecretEncrypted) {
-    throw new AppError("Connect the website under Settings before syncing orders.");
-  }
-  const url = new URL(path, publicUrl(workspace.storeBaseUrl));
-  for (const [key, value] of Object.entries(search)) url.searchParams.set(key, value);
-  const response = await wooFetch(url, decryptSecret(workspace.storeKeyEncrypted), decryptSecret(workspace.storeSecretEncrypted));
-  return response.json() as Promise<unknown>;
 }
 
 async function ownedSupplier(workspaceId: string, supplierId: string) {

@@ -23,10 +23,15 @@ export function orderReservesStock(status: string) {
 }
 
 export function parseStoreOrders(body: unknown) {
-  if (!Array.isArray(body)) return { orders: [] as ParsedStoreOrder[], skipped: 0, error: "The website did not return an order list." };
+  const list = Array.isArray(body)
+    ? body
+    : body && typeof body === "object" && Array.isArray((body as { orders?: unknown }).orders)
+      ? (body as { orders: unknown[] }).orders
+      : null;
+  if (!list) return { orders: [] as ParsedStoreOrder[], skipped: 0, error: "The store did not return an order list." };
   const orders: ParsedStoreOrder[] = [];
   let skipped = 0;
-  for (const entry of body) {
+  for (const entry of list) {
     const order = oneOrder(entry);
     if (!order) skipped += 1;
     else orders.push(order);
@@ -39,21 +44,21 @@ function oneOrder(entry: unknown): ParsedStoreOrder | null {
   const record = entry as Record<string, unknown>;
   const externalId = text(record.id);
   const billing = record.billing && typeof record.billing === "object" ? record.billing as Record<string, unknown> : {};
-  const email = text(billing.email).toLowerCase();
-  const placedAt = new Date(text(record.date_created_gmt || record.date_created));
-  const totalCents = parseMoneyToCents(text(record.total));
+  const email = (text(record.email) || text(billing.email)).toLowerCase();
+  const placedAt = new Date(text(record.placedAt || record.date_created_gmt || record.date_created));
+  const totalCents = integerCents(record.totalCents) ?? parseMoneyToCents(text(record.total));
   if (!externalId || !email || Number.isNaN(placedAt.getTime()) || totalCents === null) return null;
   const first = text(billing.first_name);
   const last = text(billing.last_name);
-  const lines = orderLines(record.line_items);
+  const lines = orderLines(record.lines ?? record.line_items);
   const summary = lines.slice(0, 4).map((line) => `${line.quantity} x ${line.sku}`).join(", ");
   return {
     externalId,
     number: text(record.number) || externalId,
     status: text(record.status) || "unknown",
     email,
-    customerName: `${first} ${last}`.trim() || email,
-    companyName: text(billing.company),
+    customerName: text(record.customerName) || `${first} ${last}`.trim() || email,
+    companyName: text(record.companyName) || text(billing.company),
     totalCents,
     currency: text(record.currency) || "ZAR",
     summary,
@@ -74,6 +79,10 @@ function orderLines(value: unknown): ParsedOrderLine[] {
     lines.push({ sku, quantity: Math.ceil(quantity) });
   }
   return lines;
+}
+
+function integerCents(value: unknown) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 function text(value: unknown) {

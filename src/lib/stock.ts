@@ -20,6 +20,14 @@ export function assertPublicHttpsUrl(value: string) {
   return url;
 }
 
+export function priceAllowedByMargin(costCents: number, sellCents: number, minimumMarginPercent: number) {
+  if (!Number.isInteger(minimumMarginPercent) || minimumMarginPercent <= 0) return true;
+  if (!Number.isInteger(costCents) || costCents <= 0) return true;
+  if (!Number.isInteger(sellCents) || sellCents <= 0) return false;
+  const margin = Math.floor(((sellCents - costCents) * 100) / sellCents);
+  return margin >= minimumMarginPercent;
+}
+
 export function markedUpCents(costCents: number, markupPercent: number) {
   if (!Number.isInteger(costCents) || costCents < 0) return null;
   if (!Number.isInteger(markupPercent) || markupPercent < 0 || markupPercent > 300) return null;

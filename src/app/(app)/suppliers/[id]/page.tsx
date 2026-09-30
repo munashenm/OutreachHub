@@ -18,7 +18,7 @@ export default async function SupplierDetailPage({ params }: { params: Promise<{
       <PageHeader title={supplier.name} description={supplier.email ?? "No email"} actions={<Link href="/suppliers" className="text-sm text-accent">Back</Link>} />
       <Panel className="p-5">
         <h2 className="font-semibold">Stock feed</h2>
-        <p className="mt-1 mb-4 text-sm text-muted">Pull cost and quantity from the supplier API. The sell price is the cost plus the markup. Unknown SKUs are skipped.</p>
+        <p className="mt-1 mb-4 text-sm text-muted">Pull cost and quantity from the supplier API. The sell price is the cost plus the markup, unless that price is below the store’s minimum margin. Unknown SKUs are skipped.</p>
         {supplier.lastStockSyncError ? <p className="mb-3 text-sm text-red-700">{supplier.lastStockSyncError}</p> : null}
         {supplier.lastStockSyncAt ? <p className="mb-3 text-sm text-muted">Last sync {formatDateTime(supplier.lastStockSyncAt)}</p> : null}
         <SupplierFeedForm supplierId={supplier.id} markupPercent={supplier.markupPercent} stockFeedUrl={supplier.stockFeedUrl ?? ""} hasKey={Boolean(supplier.stockFeedKeyEncrypted)} />

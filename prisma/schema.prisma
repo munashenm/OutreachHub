@@ -151,11 +151,15 @@ model Workspace {
   slug      String   @unique
   isDemo              Boolean   @default(false)
   quoteSequence       Int       @default(0)
-  storeBaseUrl        String?
-  storeKeyEncrypted   String?
-  storeSecretEncrypted String?
-  storeLastSyncAt     DateTime?
-  storeLastError      String?
+  storeName              String?
+  storePublicUrl         String?
+  storeBaseUrl           String?
+  storeProvider          String    @default("urban-focus")
+  storeKeyEncrypted      String?
+  storeSecretEncrypted   String?
+  minimumMarginPercent   Int       @default(0)
+  storeLastSyncAt        DateTime?
+  storeLastError         String?
   createdAt           DateTime  @default(now())
   updatedAt DateTime @updatedAt
 

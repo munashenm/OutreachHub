@@ -194,9 +194,11 @@ export const supplierFeedSchema = z.object({
 });
 
 export const storeConnectionSchema = z.object({
-  storeBaseUrl: z.string().trim().max(500).optional().default(""),
-  consumerKey: z.string().trim().max(500).optional().default(""),
-  consumerSecret: z.string().trim().max(500).optional().default(""),
+  storeName: z.string().trim().max(160).optional().default(""),
+  storeUrl: z.string().trim().max(500).optional().default(""),
+  apiBaseUrl: z.string().trim().max(500).optional().default(""),
+  apiKey: z.string().trim().max(500).optional().default(""),
+  minimumMarginPercent: z.coerce.number().int().min(0).max(90),
 });
 
 export const supplierSchema = z.object({
