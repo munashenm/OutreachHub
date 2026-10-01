@@ -326,7 +326,7 @@ function httpsUrl(value: unknown) {
 }
 
 function clip(value: unknown, max: number) {
-  return typeof value === "string" ? value.trim().slice(0, max) : "";
+  return typeof value === "string" ? value.replaceAll("\u0000", "").trim().slice(0, max) : "";
 }
 
 function positiveInt(value: unknown) {
@@ -334,7 +334,8 @@ function positiveInt(value: unknown) {
 }
 
 function nonNegativeInt(value: unknown) {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100_000_000_00 ? value : null;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return null;
+  return Math.min(value, 2_147_483_647);
 }
 
 function grouped(records: readonly CatalogueRecord[], key: (record: CatalogueRecord) => string) {

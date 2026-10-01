@@ -12,6 +12,14 @@ import {
 } from "../lib/catalogue-reconcile";
 import { loadStoreProvider } from "./store/load";
 
+function safeCatalogueFailure(error: unknown) {
+  if (error instanceof AppError) return error.message;
+  if (error instanceof Prisma.PrismaClientKnownRequestError) return `The catalogue could not be saved (${error.code}).`;
+  if (error instanceof Prisma.PrismaClientValidationError) return "The catalogue page included a value that could not be saved.";
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) return "The store catalogue request timed out.";
+  return "The store catalogue could not be read.";
+}
+
 const PAGE_SIZE = 40;
 const MANUAL = new Set(["ACCEPTED", "REJECTED", "IGNORED", "MERGED", "IMAGE_REVIEW_REQUIRED"]);
 
@@ -24,9 +32,15 @@ export async function readStoreCatalogueBatch(workspaceId: string) {
     orderBy: { startedAt: "desc" },
   });
   if (!scan) {
-    scan = await db.storeCatalogueScan.create({
-      data: { workspaceId, status: "RUNNING", page: 1, perPage: 100, readOnly: true },
+    const failed = await db.storeCatalogueScan.findFirst({
+      where: { workspaceId, status: "FAILED" },
+      orderBy: { startedAt: "desc" },
     });
+    scan = failed
+      ? await db.storeCatalogueScan.update({ where: { id: failed.id }, data: { status: "RUNNING", error: null } })
+      : await db.storeCatalogueScan.create({
+          data: { workspaceId, status: "RUNNING", page: 1, perPage: 100, readOnly: true },
+        });
   }
   const scanId = scan.id;
   let parsed;
@@ -36,12 +50,13 @@ export async function readStoreCatalogueBatch(workspaceId: string) {
     if ("error" in page) throw new AppError(page.error);
     parsed = page;
   } catch (error) {
-    const message = error instanceof AppError ? error.message : "The store catalogue could not be read.";
+    const message = safeCatalogueFailure(error);
     await db.storeCatalogueScan.update({ where: { id: scan.id }, data: { status: "FAILED", error: message.slice(0, 300) } });
-    throw error instanceof AppError ? error : new AppError(message);
+    throw new AppError(message);
   }
-  if (parsed.products.length > 0) {
-    await db.$transaction(parsed.products.map((product) => db.storeCatalogueItem.upsert({
+  const products = [...new Map(parsed.products.map((product) => [product.storeProductId, product])).values()];
+  if (products.length > 0) {
+    await db.$transaction(products.map((product) => db.storeCatalogueItem.upsert({
       where: { workspaceId_storeProductId: { workspaceId, storeProductId: product.storeProductId } },
       create: {
         workspaceId,
@@ -95,7 +110,7 @@ export async function readStoreCatalogueBatch(workspaceId: string) {
         url: product.url,
         storeUpdatedAt: product.storeUpdatedAt ? new Date(product.storeUpdatedAt) : null,
       },
-    })));
+    })), { timeout: 20_000 });
   }
   const imported = scan.imported + parsed.products.length;
   if (scan.page < parsed.lastPage) {
@@ -168,7 +183,7 @@ export async function readCatalogueForCron() {
         total: 0,
         stats: null,
         checks: null,
-        error: error instanceof AppError ? error.message : "The store catalogue could not be read.",
+        error: safeCatalogueFailure(error),
       });
     }
   }

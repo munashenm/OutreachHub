@@ -89,6 +89,32 @@ test("reads a store catalogue page and drops a placeholder image", () => {
   assert.equal(parsed.products[0]?.brandModelKey, "FOCUS|MPN24");
 });
 
+test("stores a huge price and drops characters Postgres cannot save", () => {
+  const parsed = parseStoreCataloguePage({
+    page: 1,
+    perPage: 1,
+    total: 1,
+    lastPage: 1,
+    products: [{
+      storeProductId: "9",
+      sku: "BIG",
+      name: "Meter\u0000",
+      brand: "",
+      category: "",
+      unitPriceCents: 9_000_000_000,
+      stockQuantity: 1,
+      published: true,
+      description: "a\u0000b",
+      imageUrls: [],
+    }],
+  });
+  assert.equal("error" in parsed, false);
+  if ("error" in parsed) return;
+  assert.equal(parsed.products[0]?.name, "Meter");
+  assert.equal(parsed.products[0]?.description, "ab");
+  assert.equal(parsed.products[0]?.unitPriceCents, 2_147_483_647);
+});
+
 test("rejects a catalogue page that is not a product list", () => {
   const parsed = parseStoreCataloguePage({ status: "ok" });
   assert.equal("error" in parsed, true);
