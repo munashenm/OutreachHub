@@ -5,7 +5,7 @@ import { RfqStatusForm } from "@/components/rfq-status-form";
 import { QuotePanel } from "@/components/quote-panel";
 import { PageHeader, Panel } from "@/components/ui";
 import { formatDateTime, fullName } from "@/lib/format";
-import { formatQuoteNumber } from "@/lib/quote";
+import { formatCents, formatQuoteNumber } from "@/lib/quote";
 import { replyTargets } from "@/lib/gmail-message";
 import type { RfqStatus } from "@/lib/labels";
 import { centsToInput } from "@/services/product-service";
@@ -17,6 +17,13 @@ import { stockLeft } from "@/lib/stock";
 import { requireSession } from "@/services/auth-service";
 import { getThread } from "@/services/reply-service";
 import { getRfq } from "@/services/rfq-service";
+
+function sourceLabel(kind: string) {
+  if (kind === "URBAN_FOCUS_CATALOGUE") return "Internal catalogue";
+  if (kind === "SUPPLIER_FEED" || kind === "SUPPLIER_API") return "Supplier";
+  if (kind === "EXTERNAL_SOURCE") return "External";
+  return "Not selected";
+}
 
 export default async function RfqDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await requireSession();
@@ -40,7 +47,34 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
         <p><span className="text-muted">Customer: </span>{rfq.prospect ? <Link className="hover:underline" href={`/prospects/${rfq.prospect.id}`}>{fullName(rfq.prospect.firstName, rfq.prospect.lastName)}</Link> : "Unknown sender"}</p>
         <p><span className="text-muted">Company: </span>{rfq.company ? <Link className="hover:underline" href={`/companies/${rfq.company.id}`}>{rfq.company.companyName}</Link> : "—"}</p>
         <p className="md:col-span-2"><span className="text-muted">Original enquiry: </span><Link className="hover:underline" href={`/inbox/${rfq.sourceMessageId}`}>{rfq.sourceMessage.subject}</Link></p>
+        {rfq.automationNote ? <p className="md:col-span-2"><span className="text-muted">Automation: </span>{rfq.automationNote}</p> : null}
       </Panel>
+      {rfq.lines.length > 0 ? (
+        <Panel className="p-5">
+          <h2 className="font-semibold">Sourcing</h2>
+          <ul className="mt-3 space-y-4 text-sm">
+            {rfq.lines.map((line) => (
+              <li key={line.id} className="grid gap-1">
+                <p><span className="text-muted">Requested: </span>{line.quantity == null ? "" : `${Number(line.quantity)} × `}{line.description}</p>
+                {line.specifications ? <p><span className="text-muted">Specification: </span>{line.specifications}</p> : null}
+                <p><span className="text-muted">Sourced product: </span>{line.sourcedName || "Still sourcing"}</p>
+                <p><span className="text-muted">Source: </span>{sourceLabel(line.sourceKind)}</p>
+                <p><span className="text-muted">Match: </span>{line.matchGrade || line.matchNote || "Not selected"}</p>
+                <p><span className="text-muted">Cost status: </span>{line.costStatus === "VERIFIED" ? "Verified" : line.costStatus === "NEEDS_REVIEW" ? "Needs review" : "Needs review"}</p>
+                <p><span className="text-muted">Stock: </span>{line.stockNote || "Not confirmed"}</p>
+              </li>
+            ))}
+          </ul>
+          {draft && draft.lines.length > 0 ? (
+            <div className="mt-4 space-y-1 text-sm">
+              {draft.lines.map((line) => (
+                <p key={line.id}><span className="text-muted">Sell price: </span>{line.description} — {formatCents(line.unitPriceCents)}</p>
+              ))}
+            </div>
+          ) : <p className="mt-4 text-sm"><span className="text-muted">Sell price: </span>Not priced yet</p>}
+          <p className="mt-4 text-sm text-muted">Send Quote approves the priced option. Ask Customer uses the reply box when a detail is still missing. Search Again runs on the next mail sync after a supplier or external source is updated. Manual Source is a line added on the quotation.</p>
+        </Panel>
+      ) : null}
       <Panel className="p-5">
         <h2 className="font-semibold">Conversation</h2>
         <div className="mt-4 space-y-4">

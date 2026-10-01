@@ -114,11 +114,13 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
     const lines = [];
     for (const line of updated.lines) {
       const shot = snapshotQuoteLine(line.product);
+      const specifications = line.specifications.trim() ? line.specifications : shot.specifications;
+      const imageUrls = line.imageUrls.length > 0 ? line.imageUrls : shot.imageUrls;
       await tx.quoteLine.update({
         where: { id: line.id },
-        data: { specifications: shot.specifications, imageUrls: shot.imageUrls },
+        data: { specifications, imageUrls },
       });
-      lines.push({ ...line, specifications: shot.specifications, imageUrls: shot.imageUrls });
+      lines.push({ ...line, specifications, imageUrls });
     }
     return { ...updated, lines };
   });

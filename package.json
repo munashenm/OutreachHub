@@ -7,7 +7,7 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --import tsx --test src/lib/marketing.test.ts src/lib/csv.test.ts src/lib/import-plan.test.ts src/lib/password.test.ts src/lib/validators.test.ts src/lib/merge.test.ts src/lib/sending-window.test.ts src/lib/delivery.test.ts src/lib/unsubscribe.test.ts src/lib/microsoft.test.ts src/lib/ai-draft.test.ts src/lib/gmail-sync.test.ts src/lib/token-crypto.test.ts src/lib/quote.test.ts src/lib/supplier-feed.test.ts src/lib/supplier-connector.test.ts src/lib/stock.test.ts src/lib/store-order.test.ts src/lib/google-auth.test.ts src/lib/catalogue-reconcile.test.ts src/lib/automation.test.ts",
+    "test": "node --import tsx --test src/lib/marketing.test.ts src/lib/csv.test.ts src/lib/import-plan.test.ts src/lib/password.test.ts src/lib/validators.test.ts src/lib/merge.test.ts src/lib/sending-window.test.ts src/lib/delivery.test.ts src/lib/unsubscribe.test.ts src/lib/microsoft.test.ts src/lib/ai-draft.test.ts src/lib/gmail-sync.test.ts src/lib/token-crypto.test.ts src/lib/quote.test.ts src/lib/supplier-feed.test.ts src/lib/supplier-connector.test.ts src/lib/stock.test.ts src/lib/store-order.test.ts src/lib/google-auth.test.ts src/lib/catalogue-reconcile.test.ts src/lib/automation.test.ts src/lib/sourcing.test.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",

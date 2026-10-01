@@ -12,6 +12,7 @@ import {
   imagesFromProductPage,
   matchRfqLine,
   mergeRfqExtraction,
+  PUBLIC_PRICE_NOTE,
   nameKey,
   newProductDecision,
   priceQuotation,
@@ -49,11 +50,18 @@ test("keeps a stated quantity phrase and does not invent a prose product", () =>
   assert.equal(stated.lines[0]?.sku, "");
   const prose = [
     "Please quote 5 Lenovo ThinkPad E14 laptops.",
-    "We need 10 HP laptops with Core i5, 16GB RAM and 512GB SSD.",
     "Kindly provide pricing for 20 units of D11G8ET.",
-    "Please send a quote for five laptops, Core i5, 16GB RAM, 512GB SSD and Windows 11 Pro.",
   ];
   for (const body of prose) assert.deepEqual(extractRfqRequest(body).lines, []);
+  const specified = extractRfqRequest("We need 10 HP laptops with Core i5, 16GB RAM and 512GB SSD.");
+  assert.equal(specified.lines.length, 1);
+  assert.equal(specified.lines[0]?.quantity, 10);
+  assert.match(specified.lines[0]?.specifications ?? "", /Core i5/);
+  assert.match(specified.lines[0]?.specifications ?? "", /16GB RAM/);
+  assert.match(specified.lines[0]?.specifications ?? "", /512GB SSD/);
+  const wordedSpec = extractRfqRequest("Please send a quote for five laptops, Core i5, 16GB RAM, 512GB SSD and Windows 11 Pro.");
+  assert.equal(wordedSpec.lines[0]?.quantity, 5);
+  assert.match(wordedSpec.lines[0]?.specifications ?? "", /Windows 11 Pro/);
 });
 
 test("uses grounded AI lines only when the deterministic extract is empty", () => {
@@ -120,6 +128,40 @@ test("matches a part number and refuses an ambiguous barcode", () => {
   const ambiguous = matchRfqLine({ barcode: "6001234567890" }, catalogue);
   assert.equal(ambiguous.status, "NEEDS_PRODUCT_REVIEW");
   assert.equal(ambiguous.productId, null);
+});
+
+test("quotes one product that meets the specification and holds a public price", () => {
+  const laptop = hit({
+    id: "store-e14",
+    productId: "prod-e14",
+    sku: "E14",
+    skuKey: "E14",
+    mpnKey: "E14G5",
+    name: "Lenovo ThinkPad E14",
+    nameKey: nameKey("Lenovo ThinkPad E14"),
+    specifications: "Intel Core i5, 16 GB memory, 512 GB NVMe, 14-inch, Windows 11 Pro",
+  });
+  const other = hit({
+    id: "store-other",
+    productId: "prod-other",
+    sku: "OTHER",
+    skuKey: "OTHER",
+    mpnKey: "OTHER1",
+    name: "Other laptop",
+    nameKey: nameKey("Other laptop"),
+    specifications: "Intel Core i7, 32 GB memory, 1 TB SSD",
+  });
+  const request = { description: "laptops", specifications: "Core i5, 16GB RAM, 512GB SSD, Windows 11 Pro" };
+  const matched = matchRfqLine(request, [laptop, other]);
+  assert.equal(matched.status, "MATCHED");
+  assert.equal(matched.productId, "prod-e14");
+  assert.equal(matched.reason, "Matched the specification.");
+  const duplicate = matchRfqLine(request, [laptop, { ...laptop, id: "store-e14b", productId: "prod-e14b", sku: "E14B" }]);
+  assert.equal(duplicate.status, "NEEDS_PRODUCT_REVIEW");
+  assert.equal(duplicate.productId, null);
+  const missing = matchRfqLine(request, [other]);
+  assert.equal(missing.reason, PUBLIC_PRICE_NOTE);
+  assert.equal(missing.productId, null);
 });
 
 test("prices exclusive cost with markup and holds a low margin", () => {

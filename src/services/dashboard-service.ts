@@ -69,7 +69,7 @@ export async function getDashboard(workspaceId: string) {
     db.message.count({
       where: { workspaceId, direction: "INBOUND", ignored: false, OR: [{ category: null }, { category: "NEW_ENQUIRY" }] },
     }),
-    db.rfq.count({ where: { workspaceId, status: { in: ["NEW", "REVIEWING"] } } }),
+    db.rfq.count({ where: { workspaceId, status: { in: ["NEW", "SOURCING", "REVIEWING"] } } }),
     db.message.count({ where: { workspaceId, direction: "INBOUND", createdAt: { gte: today } } }),
     db.message.count({
       where: { workspaceId, direction: "OUTBOUND", status: "SENT", campaignId: { not: null }, sentAt: { gte: today } },

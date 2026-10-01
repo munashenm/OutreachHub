@@ -125,6 +125,7 @@ export const INBOX_CATEGORY_LABELS: Record<InboxCategory, string> = {
 
 export const RFQ_STATUSES = [
   "NEW",
+  "SOURCING",
   "REVIEWING",
   "NEEDS_INFORMATION",
   "READY_TO_QUOTE",
@@ -139,6 +140,7 @@ export type RfqStatus = (typeof RFQ_STATUSES)[number];
 
 export const RFQ_STATUS_LABELS: Record<RfqStatus, string> = {
   NEW: "New",
+  SOURCING: "Sourcing",
   REVIEWING: "Reviewing",
   NEEDS_INFORMATION: "Needs information",
   READY_TO_QUOTE: "Ready to quote",

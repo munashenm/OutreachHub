@@ -107,6 +107,7 @@ enum InboxCategory {
 
 enum RfqStatus {
   NEW
+  SOURCING
   REVIEWING
   NEEDS_INFORMATION
   READY_TO_QUOTE
@@ -185,6 +186,7 @@ model Workspace {
   catalogueScans    StoreCatalogueScan[]
   catalogueItems    StoreCatalogueItem[]
   catalogueAudits   CatalogueAudit[]
+  externalOffers    ExternalSourceOffer[]
 }
 
 model Membership {
@@ -486,6 +488,11 @@ model RfqLine {
   matchNote              String   @default("")
   productId              String?
   storeProductId         String   @default("")
+  sourcedName            String   @default("")
+  sourceKind             String   @default("")
+  matchGrade             String   @default("")
+  costStatus             String   @default("")
+  stockNote              String   @default("")
 
   rfq     Rfq      @relation(fields: [rfqId], references: [id], onDelete: Cascade)
   product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
@@ -570,6 +577,11 @@ model QuoteLine {
   unitPriceCents Int
   specifications String   @default("")
   imageUrls      String[] @default([])
+  sourceKind     String   @default("")
+  sourceUrl      String   @default("")
+  sourceCheckedAt DateTime?
+  matchGrade     String   @default("")
+  costStatus     String   @default("")
 
   quote   Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
   product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
@@ -657,6 +669,36 @@ model SupplierPrice {
   @@unique([supplierId, productId])
   @@index([workspaceId])
   @@index([productId])
+}
+
+model ExternalSourceOffer {
+  id                String   @id @default(cuid())
+  workspaceId       String
+  cacheKey          String   @default("")
+  sourceName        String
+  sourceUrl         String
+  productName       String
+  brand             String   @default("")
+  model             String   @default("")
+  sku               String   @default("")
+  mpn               String   @default("")
+  specifications    String   @default("")
+  listedPriceCents  Int
+  currency          String   @default("ZAR")
+  vatIncluded       Boolean  @default(true)
+  shippingCents     Int      @default(0)
+  availability      String   @default("")
+  deliveryEstimate  String   @default("")
+  checkedAt         DateTime
+  confidence        String   @default("MEDIUM")
+  sourceType        String   @default("RETAILER")
+  stockQty          Int?
+  createdAt         DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, cacheKey])
+  @@index([workspaceId, checkedAt])
 }
 
 model StoreOrder {

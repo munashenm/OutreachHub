@@ -2,6 +2,7 @@ import { barcodeKey, brandModelKey, mpnKey, skuKey } from "./catalogue-reconcile
 import { markedUpCents } from "./stock";
 
 export const ACKNOWLEDGEMENT = "Thank you for your request for quotation. We have received your enquiry and are checking current pricing and availability. We will respond with the quotation shortly.";
+export const PUBLIC_PRICE_NOTE = "No catalogue product meets the specification. Public seller prices were not used as a cost.";
 
 export type InboundKind =
   | "RFQ"
@@ -56,6 +57,7 @@ export type CatalogueHit = {
   brandModelKey: string;
   nameKey: string;
   name: string;
+  specifications?: string;
 };
 
 export type LineMatch = {
@@ -113,7 +115,7 @@ export function extractRfqRequest(body: string): ExtractedRfq {
   const referenceMatch = body.match(/\b(?:rfq|reference|ref|enquiry)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Z0-9][A-Z0-9./-]{2,})/i);
   const products: RfqLineDraft[] = [];
   for (const line of lines) {
-    const product = productLine(line) ?? inlineQuantity(line);
+    const product = productLine(line) ?? inlineQuantity(line) ?? specificationRequest(line);
     if (product) products.push(product);
   }
   return {
@@ -129,7 +131,7 @@ export function extractRfqRequest(body: string): ExtractedRfq {
 }
 
 export function matchRfqLine(
-  line: { sku?: string; manufacturerPartNumber?: string; barcode?: string; manufacturer?: string; model?: string; description?: string },
+  line: { sku?: string; manufacturerPartNumber?: string; barcode?: string; manufacturer?: string; model?: string; description?: string; specifications?: string },
   hits: readonly CatalogueHit[],
   confirmedSupplierSkus: ReadonlyMap<string, string> = new Map(),
 ): LineMatch {
@@ -177,6 +179,8 @@ export function matchRfqLine(
       return { status: "NEEDS_PRODUCT_REVIEW", productId: null, storeProductId: "", sku: "", reason: "More than one catalogue product has this name." };
     }
   }
+  const specification = matchSpecification(`${line.description ?? ""} ${line.specifications ?? ""}`, hits);
+  if (specification) return specification;
   const fuzzy = fuzzyName(line.description ?? "", hits);
   if (fuzzy) {
     return { status: "NEEDS_PRODUCT_REVIEW", productId: null, storeProductId: fuzzy.id, sku: "", reason: "The name is only similar to a catalogue product. Confirm it before quoting." };
@@ -349,7 +353,7 @@ function productLine(line: string): RfqLineDraft | null {
     model: manufacturerPartNumber,
     sku,
     manufacturerPartNumber,
-    specifications: "",
+    specifications: specificationLabel(description),
   };
 }
 
@@ -429,6 +433,98 @@ function token(value: string, pattern: RegExp) {
 
 export function nameKey(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+
+function specificationLabel(text: string) {
+  return specificationChecks(text).map((check) => check.label).join(", ").slice(0, 8000);
+}
+
+function specificationRequest(line: string): RfqLineDraft | null {
+  const checks = specificationChecks(line);
+  if (checks.length < 2) return null;
+  const stripped = checks.reduce((text, check) => text.replace(check.source, " "), line);
+  const quantity = requestQuantity(stripped);
+  if (quantity == null) return null;
+  return {
+    description: line.replace(/\.$/, "").trim().slice(0, 300),
+    quantity,
+    manufacturer: "",
+    model: "",
+    sku: "",
+    manufacturerPartNumber: "",
+    specifications: checks.map((check) => check.label).join(", "),
+  };
+}
+
+function requestQuantity(text: string) {
+  const digit = text.match(/\b(\d+)\b/);
+  if (digit) {
+    const quantity = Number(digit[1]);
+    if (Number.isInteger(quantity) && quantity > 0 && quantity <= 100000) return quantity;
+  }
+  const word = text.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|twenty)\b/i);
+  return word ? NUMBER_WORDS[word[1].toLowerCase()] ?? null : null;
+}
+
+type SpecCheck = { label: string; source: RegExp; met: (haystack: string) => boolean };
+
+function specificationChecks(text: string): SpecCheck[] {
+  const checks: SpecCheck[] = [];
+  const seen = new Set<string>();
+  const add = (check: SpecCheck) => {
+    const key = check.label.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    checks.push(check);
+  };
+  if (/\bwindows\s+11\s+pro\b/i.test(text)) add({ label: "Windows 11 Pro", source: /\bwindows\s+11\s+pro\b/i, met: (haystack) => haystack.includes("windows 11 pro") });
+  else if (/\bwindows\s+11\b/i.test(text)) add({ label: "Windows 11", source: /\bwindows\s+11\b/i, met: (haystack) => /\bwindows 11\b/.test(haystack) });
+  const core = text.match(/\bcore\s+i([3579])\b/i);
+  if (core?.[1]) add({ label: `Core i${core[1]}`, source: new RegExp(`\\bcore\\s+i${core[1]}\\b`, "i"), met: (haystack) => haystack.includes(`core i${core[1]}`) });
+  const ryzen = text.match(/\bryzen\s+([3579])\b/i);
+  if (ryzen?.[1]) add({ label: `Ryzen ${ryzen[1]}`, source: new RegExp(`\\bryzen\\s+${ryzen[1]}\\b`, "i"), met: (haystack) => haystack.includes(`ryzen ${ryzen[1]}`) });
+  const ram = text.match(/\b(\d+)\s*gb\s*ram\b/i);
+  if (ram?.[1]) {
+    const size = ram[1];
+    add({ label: `${size}GB RAM`, source: new RegExp(`\\b${size}\\s*gb\\s*ram\\b`, "i"), met: (haystack) => new RegExp(`\\b${size} gb\\b`).test(haystack) && /\b(ram|memory)\b/.test(haystack) });
+  }
+  const disk = text.match(/\b(\d+)\s*(gb|tb)\s*(ssd|nvme|hdd)\b/i);
+  if (disk?.[1] && disk[2] && disk[3]) {
+    const size = disk[1];
+    const unit = disk[2].toLowerCase();
+    const kind = disk[3].toLowerCase();
+    add({
+      label: `${size}${unit.toUpperCase()} ${kind.toUpperCase()}`,
+      source: new RegExp(`\\b${size}\\s*${unit}\\s*${kind}\\b`, "i"),
+      met: (haystack) => {
+        if (!new RegExp(`\\b${size} ${unit}\\b`).test(haystack)) return false;
+        return kind === "hdd" ? /\bhdd\b/.test(haystack) : /\b(ssd|nvme)\b/.test(haystack);
+      },
+    });
+  }
+  const screen = text.match(/\b(\d+(?:\.\d+)?)\s*(?:-| )?\s*(?:inch|inches|")\b/i);
+  if (screen?.[1]) add({ label: `${screen[1]} inch`, source: new RegExp(`\\b${screen[1]}\\s*(?:-|\\s)?\\s*(?:inch|inches|")\\b`, "i"), met: (haystack) => haystack.includes(`${screen[1]} inch`) });
+  return checks;
+}
+
+function matchSpecification(text: string, hits: readonly CatalogueHit[]): LineMatch | null {
+  const checks = specificationChecks(text);
+  if (checks.length < 2) return null;
+  const found = hits.filter((hit) => {
+    const haystack = specKey(`${hit.name} ${hit.specifications ?? ""}`);
+    return checks.every((check) => check.met(haystack));
+  });
+  if (found.length > 1) {
+    return { status: "NEEDS_PRODUCT_REVIEW", productId: null, storeProductId: "", sku: "", reason: "More than one catalogue product meets the specification. Nothing was selected." };
+  }
+  const hit = found[0];
+  if (!hit) return { status: "NEEDS_PRODUCT_REVIEW", productId: null, storeProductId: "", sku: "", reason: PUBLIC_PRICE_NOTE };
+  if (!hit.productId) return { status: "NEEDS_PRODUCT_REVIEW", productId: null, storeProductId: hit.id, sku: hit.sku, reason: "The specification matches a catalogue item that is not linked to a local product. Public seller prices were not used as a cost." };
+  return { status: "MATCHED", productId: hit.productId, storeProductId: hit.id, sku: hit.sku, reason: "Matched the specification." };
+}
+
+function specKey(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function fuzzyName(value: string, hits: readonly CatalogueHit[]) {

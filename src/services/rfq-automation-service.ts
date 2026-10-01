@@ -24,6 +24,7 @@ import { recordActivity } from "./activity-service";
 import { extractQuotationFields } from "./ai-service";
 import { sendQuote } from "./quote-service";
 import { sendThreadReply } from "./reply-service";
+import { extractProductRequirements, planSourcing, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
 
 const BATCH = 15;
 
@@ -215,113 +216,186 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     include: { lines: true, quotes: true, sourceMessage: true },
   });
   if (!rfq || rfq.quotes.some((quote) => quote.status === "SENT")) return;
-  if (rfq.lines.length === 0 || rfq.lines.some((line) => line.quantity == null)) {
-    await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: "A product or quantity was not stated, so no quotation was created." } });
+  const requirements = extractProductRequirements(`${rfq.sourceMessage?.subject ?? rfq.subject}\n${rfq.sourceMessage?.body || rfq.description}`);
+  const plan = planSourcing({
+    requirements,
+    pools: await sourcingPools(workspace.id),
+    minimumMarginPercent: workspace.minimumMarginPercent,
+    autoQuoteMarginPercent: workspace.autoQuoteMarginPercent,
+    autoSendMarginPercent: workspace.autoSendMarginPercent,
+  });
+  if (plan.kind === "CLARIFICATION") {
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: plan.message } });
+    await sendSourcingReply(rfq, plan.message);
     return;
   }
-  const hits = await catalogueHits(workspace.id);
-  const confirmed = await confirmedSupplierMap(workspace.id);
-  const matches = [];
-  for (const line of rfq.lines) {
-    const match = matchRfqLine({
-      sku: line.sku,
-      manufacturerPartNumber: line.manufacturerPartNumber || line.modelName,
-      manufacturer: line.manufacturer,
-      model: line.modelName,
-      description: line.description,
-    }, hits, confirmed);
-    matches.push({ line, match });
+  if (plan.kind === "SOURCING") {
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "SOURCING", automationNote: plan.note } });
+    await sendSourcingReply(rfq, plan.message);
+    return;
+  }
+  if (plan.kind === "STAFF_REVIEW") {
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: plan.note } });
+    return;
+  }
+  const recommended = plan.options[0];
+  if (recommended && rfq.lines[0]) {
     await db.rfqLine.update({
-      where: { id: line.id },
-      data: { matchStatus: match.status, matchNote: match.reason, productId: match.productId, storeProductId: match.storeProductId },
+      where: { id: rfq.lines[0].id },
+      data: {
+        sourcedName: recommended.name,
+        sourceKind: recommended.sourceKind,
+        matchGrade: recommended.match,
+        costStatus: recommended.costStatus,
+        stockNote: recommended.stockQty == null ? "" : `${recommended.stockQty} available`,
+        matchStatus: "MATCHED",
+        matchNote: recommended.match,
+        productId: recommended.productId,
+      },
     });
-  }
-  if (matches.some((item) => item.match.status !== "MATCHED" || !item.match.productId)) {
-    await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: "A line needs a product review before a quotation can be created." } });
-    return;
-  }
-  const productIds = matches.map((item) => item.match.productId).filter((id): id is string => Boolean(id));
-  const offers = await db.supplierPrice.findMany({
-    where: { workspaceId: workspace.id, productId: { in: productIds } },
-    include: { supplier: { select: { markupPercent: true, preference: true, leadTimeDays: true, priceSyncIntervalMinutes: true } } },
-  });
-  const products = await db.product.findMany({ where: { workspaceId: workspace.id, id: { in: productIds } }, select: { id: true, unitPriceCents: true, specifications: true } });
-  const now = new Date();
-  const priced = matches.map((item) => {
-    const rows = offers.filter((offer) => offer.productId === item.match.productId);
-    const chosen = chooseSupplierOffer(rows.map((row) => ({
-      supplierId: row.supplierId,
-      costCents: row.costCents,
-      costKnown: row.costKnown,
-      stockQty: row.stockQty,
-      stockKnown: row.stockKnown,
-      updatedAt: row.updatedAt,
-      preference: row.supplier.preference,
-      leadTimeDays: row.leadTimeDays ?? row.supplier.leadTimeDays,
-      priceFreshMs: row.supplier.priceSyncIntervalMinutes * 60 * 1000,
-    })), Number(item.line.quantity), now);
-    const source = chosen ? rows.find((row) => row.supplierId === chosen.supplierId) : null;
-    const current = products.find((product) => product.id === item.match.productId)?.unitPriceCents ?? 0;
-    const sellPreview = source && chosen?.costCents != null ? priceQuotation({
-      costExVatCents: chosen.costCents,
-      markupPercent: source.supplier.markupPercent,
-      minimumMarginPercent: workspace.minimumMarginPercent,
-      autoQuoteMarginPercent: workspace.autoQuoteMarginPercent,
-      autoSendMarginPercent: workspace.autoSendMarginPercent,
-      fresh: true,
-      stockKnown: true,
-      stockQty: chosen.stockQty,
-      requestedQty: Number(item.line.quantity),
-      abnormalPriceChange: false,
-    }).sellExVatCents : null;
-    const decision = priceQuotation({
-      costExVatCents: chosen?.costCents ?? null,
-      markupPercent: source?.supplier.markupPercent ?? 0,
-      minimumMarginPercent: workspace.minimumMarginPercent,
-      autoQuoteMarginPercent: workspace.autoQuoteMarginPercent,
-      autoSendMarginPercent: workspace.autoSendMarginPercent,
-      fresh: Boolean(chosen),
-      stockKnown: Boolean(chosen),
-      stockQty: chosen?.stockQty ?? null,
-      requestedQty: Number(item.line.quantity),
-      abnormalPriceChange: sellPreview != null && priceChangeNeedsApproval(current, sellPreview),
-    });
-    return { ...item, decision, specifications: products.find((product) => product.id === item.match.productId)?.specifications ?? "" };
-  });
-  const blocked = priced.some((item) => item.decision.decision === "STALE" || item.decision.decision === "STOCK_REVIEW" || item.decision.decision === "MARGIN_WARNING" || item.decision.decision === "PRICE_REVIEW");
-  if (blocked || priced.some((item) => item.decision.sellExVatCents == null)) {
-    await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: reviewNote(priced.map((item) => item.decision.decision)) } });
-    return;
   }
   let draft = rfq.quotes.find((quote) => quote.status === "DRAFT");
   if (!draft) {
     draft = await db.quote.create({ data: { workspaceId: workspace.id, rfqId: rfq.id, notes: rfq.customerReference ? `Customer reference ${rfq.customerReference}` : "" } });
-    for (const item of priced) {
+    for (const [index, option] of plan.options.entries()) {
       await db.quoteLine.create({
         data: {
           workspaceId: workspace.id,
           quoteId: draft.id,
-          productId: item.match.productId,
-          description: item.line.description,
-          quantity: item.line.quantity ?? new Prisma.Decimal(0),
-          unitPriceCents: item.decision.sellExVatCents ?? 0,
-          specifications: item.specifications,
+          productId: option.productId,
+          description: plan.options.length > 1 ? `Option ${index + 1} — ${option.role}: ${option.name}` : option.name,
+          quantity: new Prisma.Decimal(option.quantity.toFixed(2)),
+          unitPriceCents: option.unitPriceCents,
+          specifications: option.specifications,
+          sourceKind: option.sourceKind,
+          sourceUrl: option.sourceUrl,
+          sourceCheckedAt: option.checkedAt ? new Date(option.checkedAt) : null,
+          matchGrade: option.match,
+          costStatus: option.costStatus,
         },
       });
     }
   }
-  const decisions = priced.map((item) => item.decision.decision);
-  const autoSend = canAutoSend({
-    decisions,
-    matchesHighConfidence: true,
-    specificationClear: priced.every((item) => item.line.description.trim().length >= 3),
-    autoSendMarginMet: priced.every((item) => (item.decision.marginPercent ?? -1) >= workspace.autoSendMarginPercent),
-  });
-  if (!autoSend) {
-    await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: "The quotation is ready for approval." } });
+  if (!plan.send) {
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: plan.note } });
     return;
   }
   await sendQuote({ userId: "system", workspaceId: workspace.id }, rfq.id, { validDays: 14, notes: draft.notes });
+}
+
+async function sourcingPools(workspaceId: string): Promise<SourcingPools> {
+  const db = getDb();
+  const now = Date.now();
+  const freshAfter = new Date(now - 24 * 60 * 60 * 1000);
+  const [products, offers, external] = await Promise.all([
+    db.product.findMany({ where: { workspaceId, active: true }, select: { id: true, sku: true, name: true, brand: true, manufacturerPartNumber: true, specifications: true, stockOnHand: true } }),
+    db.supplierPrice.findMany({ where: { workspaceId }, include: { supplier: { select: { name: true, markupPercent: true, authType: true, priceSyncIntervalMinutes: true } } } }),
+    db.externalSourceOffer.findMany({ where: { workspaceId, checkedAt: { gte: freshAfter }, sourceUrl: { not: "" } } }),
+  ]);
+  const bestOffer = new Map<string, (typeof offers)[number]>();
+  for (const offer of offers) {
+    if (!offer.costKnown || offer.costCents <= 0) continue;
+    const current = bestOffer.get(offer.productId);
+    if (!current || offer.costCents < current.costCents) bestOffer.set(offer.productId, offer);
+  }
+  const catalogue: SourcingCandidate[] = products.map((product) => {
+    const offer = bestOffer.get(product.id);
+    const fresh = offer ? now - offer.updatedAt.getTime() <= offer.supplier.priceSyncIntervalMinutes * 60 * 1000 : false;
+    return {
+      sourceKind: "URBAN_FOCUS_CATALOGUE",
+      sourceName: "Urban Focus",
+      sourceUrl: "",
+      sourceType: "INTERNAL",
+      productId: product.id,
+      name: product.name,
+      brand: product.brand,
+      model: product.manufacturerPartNumber,
+      sku: product.sku,
+      mpn: product.manufacturerPartNumber,
+      specifications: product.specifications || product.name,
+      costExVatCents: offer?.costCents ?? null,
+      listedPriceCents: null,
+      vatIncluded: false,
+      shippingCents: 0,
+      procurementCents: 0,
+      importCents: 0,
+      riskPercent: 0,
+      markupPercent: offer?.supplier.markupPercent ?? 0,
+      stockQty: offer?.stockKnown ? offer.stockQty : product.stockOnHand,
+      stockKnown: offer ? offer.stockKnown : true,
+      fresh: offer ? fresh : product.stockOnHand > 0,
+      checkedAt: offer?.updatedAt.toISOString() ?? null,
+      reputable: true,
+    };
+  });
+  const supplierFeeds: SourcingCandidate[] = [];
+  const supplierApis: SourcingCandidate[] = [];
+  for (const offer of offers) {
+    const fresh = now - offer.updatedAt.getTime() <= offer.supplier.priceSyncIntervalMinutes * 60 * 1000;
+    const row: SourcingCandidate = {
+      sourceKind: offer.supplier.authType === "NONE" ? "SUPPLIER_FEED" : "SUPPLIER_API",
+      sourceName: offer.supplier.name,
+      sourceUrl: "",
+      sourceType: "DISTRIBUTOR",
+      productId: offer.productId,
+      name: offer.offerName || offer.supplierSku,
+      brand: offer.brand,
+      model: offer.manufacturerPartNumber,
+      sku: offer.supplierSku,
+      mpn: offer.manufacturerPartNumber,
+      specifications: offer.specifications || offer.description || offer.offerName,
+      costExVatCents: offer.costKnown ? offer.costCents : null,
+      listedPriceCents: null,
+      vatIncluded: false,
+      shippingCents: 0,
+      procurementCents: 0,
+      importCents: 0,
+      riskPercent: 0,
+      markupPercent: offer.supplier.markupPercent,
+      stockQty: offer.stockQty,
+      stockKnown: offer.stockKnown,
+      fresh,
+      checkedAt: offer.updatedAt.toISOString(),
+      reputable: true,
+    };
+    if (row.sourceKind === "SUPPLIER_API") supplierApis.push(row);
+    else supplierFeeds.push(row);
+  }
+  const externalCandidates: SourcingCandidate[] = external.map((offer) => ({
+    sourceKind: "EXTERNAL_SOURCE",
+    sourceName: offer.sourceName,
+    sourceUrl: offer.sourceUrl,
+    sourceType: offer.sourceType === "MANUFACTURER" || offer.sourceType === "DISTRIBUTOR" || offer.sourceType === "RETAILER" || offer.sourceType === "INTERNAL" ? offer.sourceType : "OTHER",
+    productId: null,
+    name: offer.productName,
+    brand: offer.brand,
+    model: offer.model,
+    sku: offer.sku,
+    mpn: offer.mpn,
+    specifications: offer.specifications,
+    costExVatCents: null,
+    listedPriceCents: offer.listedPriceCents,
+    vatIncluded: offer.vatIncluded,
+    shippingCents: offer.shippingCents,
+    procurementCents: 0,
+    importCents: 0,
+    riskPercent: 5,
+    markupPercent: 25,
+    stockQty: offer.stockQty,
+    stockKnown: offer.stockQty != null,
+    fresh: true,
+    checkedAt: offer.checkedAt.toISOString(),
+    reputable: offer.sourceType !== "OTHER",
+  }));
+  return { catalogue, supplierFeeds, supplierApis, external: externalCandidates };
+}
+
+async function sendSourcingReply(rfq: { workspaceId: string; sourceMessageId: string; subject: string; automationNote: string; sourceMessage: { fromEmail: string | null } }, message: string) {
+  if (!rfq.sourceMessage.fromEmail || rfq.automationNote === message) return;
+  await sendThreadReply(
+    { userId: "system", workspaceId: rfq.workspaceId },
+    { messageId: rfq.sourceMessageId, to: rfq.sourceMessage.fromEmail, cc: "", subject: replySubject(rfq.subject), body: message },
+  );
 }
 
 function reviewNote(decisions: PriceDecision[]) {
@@ -342,25 +416,30 @@ async function catalogueHits(workspaceId: string): Promise<CatalogueHit[]> {
   const items = scan
     ? await db.storeCatalogueItem.findMany({
       where: { workspaceId, scanId: scan.id },
-      select: { storeProductId: true, sku: true, skuKey: true, mpnKey: true, barcodeKey: true, brandModelKey: true, name: true, productId: true },
+      select: { storeProductId: true, sku: true, skuKey: true, mpnKey: true, barcodeKey: true, brandModelKey: true, name: true, productId: true, specifications: true },
     })
     : [];
   const products = await db.product.findMany({
     where: { workspaceId },
-    select: { id: true, sku: true, manufacturerPartNumber: true, barcode: true, brand: true, name: true, storeProductId: true },
+    select: { id: true, sku: true, manufacturerPartNumber: true, barcode: true, brand: true, name: true, storeProductId: true, specifications: true },
   });
   const productBySku = new Map(products.map((product) => [skuKey(product.sku), product.id]));
-  const hits: CatalogueHit[] = items.map((item) => ({
-    id: item.storeProductId,
-    productId: item.productId ?? productBySku.get(item.skuKey) ?? null,
-    sku: item.sku,
-    skuKey: item.skuKey,
-    mpnKey: item.mpnKey,
-    barcodeKey: item.barcodeKey,
-    brandModelKey: item.brandModelKey,
-    nameKey: nameKey(item.name),
-    name: item.name,
-  }));
+  const specificationsByProduct = new Map(products.map((product) => [product.id, product.specifications]));
+  const hits: CatalogueHit[] = items.map((item) => {
+    const productId = item.productId ?? productBySku.get(item.skuKey) ?? null;
+    return {
+      id: item.storeProductId,
+      productId,
+      sku: item.sku,
+      skuKey: item.skuKey,
+      mpnKey: item.mpnKey,
+      barcodeKey: item.barcodeKey,
+      brandModelKey: item.brandModelKey,
+      nameKey: nameKey(item.name),
+      name: item.name,
+      specifications: item.specifications || (productId ? specificationsByProduct.get(productId) ?? "" : ""),
+    };
+  });
   for (const product of products) {
     if (hits.some((hit) => hit.productId === product.id)) continue;
     hits.push({
@@ -373,6 +452,7 @@ async function catalogueHits(workspaceId: string): Promise<CatalogueHit[]> {
       brandModelKey: brandModelKey(product.brand, product.manufacturerPartNumber),
       nameKey: nameKey(product.name),
       name: product.name,
+      specifications: product.specifications,
     });
   }
   return hits;

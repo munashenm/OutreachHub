@@ -21,7 +21,10 @@ export async function listRfqs(workspaceId: string) {
 }
 
 export async function getRfq(workspaceId: string, id: string) {
-  const rfq = await getDb().rfq.findFirst({ where: { id, workspaceId }, include });
+  const rfq = await getDb().rfq.findFirst({
+    where: { id, workspaceId },
+    include: { ...include, lines: { orderBy: { id: "asc" } } },
+  });
   return ownedByWorkspace(rfq, workspaceId);
 }
 
