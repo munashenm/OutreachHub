@@ -36,6 +36,7 @@ export type ParsedSupplierFeed = {
   offers: SupplierOffer[];
   skipped: number;
   error: string | null;
+  costsAreExclusive?: boolean;
 };
 
 const FIELD_KEYS = [

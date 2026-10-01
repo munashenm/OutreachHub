@@ -1,0 +1,1 @@
+ALTER TABLE "Supplier" ADD COLUMN "country" TEXT NOT NULL DEFAULT '';

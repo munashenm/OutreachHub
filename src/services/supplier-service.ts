@@ -1,4 +1,5 @@
 import { getDb } from "../lib/db";
+import { missingDistributors } from "../lib/distributors";
 import { AppError } from "../lib/errors";
 import { chooseSupplierOffer, matchCatalogueOffer, offersFromCsvRecords, type SupplierOffer } from "../lib/supplier-connector";
 import { planSupplierPriceImport } from "../lib/supplier-feed";
@@ -28,14 +29,38 @@ export async function getSupplier(workspaceId: string, id: string) {
 }
 
 export async function createSupplier(actor: Actor, input: SupplierInput) {
-  return getDb().supplier.create({
+  const db = getDb();
+  const existing = await db.supplier.findFirst({
+    where: { workspaceId: actor.workspaceId, name: { equals: input.name, mode: "insensitive" } },
+    select: { id: true },
+  });
+  if (existing) throw new AppError("This supplier is already in the workspace.");
+  return db.supplier.create({
     data: {
       workspaceId: actor.workspaceId,
       name: input.name,
       email: input.email,
+      country: input.country,
       notes: input.notes,
     },
   });
+}
+
+export async function addMissingDistributors(actor: Actor) {
+  const db = getDb();
+  const existing = await db.supplier.findMany({ where: { workspaceId: actor.workspaceId }, select: { name: true } });
+  const missing = missingDistributors(existing.map((supplier) => supplier.name));
+  for (const distributor of missing) {
+    await db.supplier.create({
+      data: {
+        workspaceId: actor.workspaceId,
+        name: distributor.name,
+        country: distributor.country,
+        notes: distributor.notes,
+      },
+    });
+  }
+  return missing.length;
 }
 
 export async function lowestCostsByProduct(workspaceId: string, productIds: string[]) {

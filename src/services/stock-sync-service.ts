@@ -18,6 +18,7 @@ import {
   type SupplierOffer,
 } from "../lib/supplier-connector";
 import { frontosaFeedUrls, frontosaTokenFromUrl, isFrontosaFeed, joinFrontosaFeeds, redactSecrets } from "../lib/frontosa";
+import { isScoopFeedUrl, isScoopPriceList, parseScoopPriceList } from "../lib/scoop";
 import { decryptSecret, encryptSecret } from "../lib/token-crypto";
 import { recordActivity } from "./activity-service";
 import { baselineIdentities } from "./catalogue-service";
@@ -977,12 +978,16 @@ async function readFeed(supplier: {
   const text = await response.text();
   if (text.length > 5_000_000) throw new AppError("The supplier feed is too large.");
   const mapping = readFieldMapping(supplier.fieldMapping);
-  const parsed = supplier.feedType === "XML"
-    ? parseXmlOffers(text, mapping)
-    : supplier.feedType === "CSV_URL"
-      ? parseCsvOffers(text, mapping)
-      : parseJsonText(text, mapping);
+  const scoop = isScoopPriceList(text) || (isScoopFeedUrl(supplier.stockFeedUrl) && !text.trim().startsWith("{") && !text.trim().startsWith("["));
+  const parsed = scoop
+    ? parseScoopPriceList(text)
+    : supplier.feedType === "XML"
+      ? parseXmlOffers(text, mapping)
+      : supplier.feedType === "CSV_URL"
+        ? parseCsvOffers(text, mapping)
+        : parseJsonText(text, mapping);
   if (parsed.error) return parsed;
+  if (parsed.costsAreExclusive) return parsed;
   return {
     ...parsed,
     offers: parsed.offers.map((offer) => ({ ...offer, costCents: exclusiveCostCents(offer.costCents, supplier.vatMode) })),

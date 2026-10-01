@@ -16,10 +16,10 @@ export default async function SupplierDetailPage({ params }: { params: Promise<{
   if (!supplier) notFound();
   return (
     <div className="space-y-4">
-      <PageHeader title={supplier.name} description={supplier.email ?? "No email"} actions={<Link href="/suppliers" className="text-sm text-accent">Back</Link>} />
+      <PageHeader title={supplier.name} description={[supplier.country, supplier.email].filter(Boolean).join(" · ") || "No email"} actions={<Link href="/suppliers" className="text-sm text-accent">Back</Link>} />
       <Panel className="p-5">
         <h2 className="font-semibold">Stock feed</h2>
-        <p className="mt-1 mb-4 text-sm text-muted">JSON, XML, and CSV addresses are read on sync. A supplier stays inactive until its own feed address is saved. Feed rows stay available for sourcing even when they are not Urban Focus products yet. A website product is still created only when the publication rules pass. The catalogue price and the stock quantity follow the fresh offer that can fill one unit, then cost, preference, and lead time. Stock is not a total of every supplier.</p>
+        <p className="mt-1 mb-4 text-sm text-muted">JSON, XML, and CSV addresses are read on sync. A Scoop CSV or XML price list uses the dealer price excluding VAT and total stock. A supplier stays inactive until its own feed address is saved. Feed rows stay available for sourcing even when they are not Urban Focus products yet. A website product is still created only when the publication rules pass. The catalogue price and the stock quantity follow the fresh offer that can fill one unit, then cost, preference, and lead time. Stock is not a total of every supplier.</p>
         {supplier.lastStockSyncError ? <p className="mb-3 text-sm text-red-700">{supplier.lastStockSyncError}</p> : null}
         {supplier.lastStockSyncAt ? <p className="mb-3 text-sm text-muted">Last stock sync {formatDateTime(supplier.lastStockSyncAt)}</p> : null}
         {supplier.lastPriceSyncAt ? <p className="mb-3 text-sm text-muted">Last price sync {formatDateTime(supplier.lastPriceSyncAt)}</p> : null}

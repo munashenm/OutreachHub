@@ -16,6 +16,9 @@ export function SupplierForm() {
       <Field label="Email" name="email" error={state.fieldErrors?.email}>
         <input id="email" name="email" type="email" className={inputClass} />
       </Field>
+      <Field label="Country or region" name="country" error={state.fieldErrors?.country}>
+        <input id="country" name="country" className={inputClass} placeholder="South Africa, China, or a European country" />
+      </Field>
       <Field label="Notes" name="notes">
         <textarea id="notes" name="notes" className={textAreaClass} />
       </Field>

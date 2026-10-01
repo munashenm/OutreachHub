@@ -6,7 +6,7 @@ import type { ActionState } from "@/lib/format";
 import { runAction } from "@/lib/run-action";
 import { fieldErrors, readForm, supplierSchema } from "@/lib/validators";
 import { requireSession } from "@/services/auth-service";
-import { createSupplier } from "@/services/supplier-service";
+import { addMissingDistributors, createSupplier } from "@/services/supplier-service";
 
 export async function createSupplierAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   return runAction(async () => {
@@ -20,4 +20,10 @@ export async function createSupplierAction(_prev: ActionState, formData: FormDat
     revalidatePath("/suppliers");
     redirect(`/suppliers/${supplier.id}`);
   });
+}
+
+export async function addSouthAfricanDistributorsAction(): Promise<void> {
+  const session = await requireSession();
+  await addMissingDistributors({ userId: session.user.id, workspaceId: session.workspace.id });
+  revalidatePath("/suppliers");
 }

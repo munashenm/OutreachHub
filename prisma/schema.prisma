@@ -628,6 +628,7 @@ model Supplier {
   workspaceId String
   name        String
   email       String?
+  country                String            @default("")
   notes                  String            @default("")
   markupPercent          Int               @default(0)
   feedType               SupplierFeedType  @default(JSON)

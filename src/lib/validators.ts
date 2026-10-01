@@ -229,6 +229,7 @@ export const storeConnectionSchema = z.object({
 export const supplierSchema = z.object({
   name: requiredText(160, "Supplier name"),
   email: optionalEmail,
+  country: z.string().trim().max(80).optional().default(""),
   notes: z.string().trim().max(4000).optional().default(""),
 });
 
