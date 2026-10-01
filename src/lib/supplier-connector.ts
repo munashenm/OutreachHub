@@ -121,6 +121,24 @@ export function chooseSupplierOffer(offers: SupplierChoice[], requestedQty: numb
   return eligible[0] ?? null;
 }
 
+export function selectedSupplierStock(offers: SupplierChoice[], now: Date) {
+  const chosen = chooseSupplierOffer(offers, 1, now);
+  if (chosen?.stockQty != null) return Math.max(0, Math.floor(chosen.stockQty));
+  const fresh = offers.filter((offer) => {
+    if (now.getTime() - offer.updatedAt.getTime() > offer.priceFreshMs) return false;
+    return offer.stockKnown && offer.stockQty != null;
+  });
+  if (fresh.length === 0) return null;
+  fresh.sort((left, right) => {
+    const leftQty = Math.max(0, Math.floor(left.stockQty ?? 0));
+    const rightQty = Math.max(0, Math.floor(right.stockQty ?? 0));
+    if ((leftQty > 0) !== (rightQty > 0)) return leftQty > 0 ? -1 : 1;
+    if (left.preference !== right.preference) return right.preference - left.preference;
+    return right.updatedAt.getTime() - left.updatedAt.getTime();
+  });
+  return Math.max(0, Math.floor(fresh[0]?.stockQty ?? 0));
+}
+
 export function matchCatalogueOffer(
   offer: SupplierOffer,
   productBySku: ReadonlyMap<string, string>,

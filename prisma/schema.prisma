@@ -179,6 +179,9 @@ model Workspace {
   quotes            Quote[]
   suppliers         Supplier[]
   storeOrders       StoreOrder[]
+  catalogueScans    StoreCatalogueScan[]
+  catalogueItems    StoreCatalogueItem[]
+  catalogueAudits   CatalogueAudit[]
 }
 
 model Membership {
@@ -477,6 +480,10 @@ model Product {
   currency              String   @default("ZAR")
   active                Boolean  @default(true)
   stockOnHand           Int      @default(0)
+  manufacturerPartNumber String   @default("")
+  barcode                String   @default("")
+  brand                  String   @default("")
+  storeProductId         String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -484,6 +491,7 @@ model Product {
   quoteLines QuoteLine[]
   supplierPrices SupplierPrice[]
   storeOrderLines StoreOrderLine[]
+  catalogueItems StoreCatalogueItem[]
 
   @@unique([workspaceId, sku])
   @@index([workspaceId, active])
@@ -648,4 +656,85 @@ model StoreOrderLine {
   @@index([workspaceId])
   @@index([orderId])
   @@index([productId])
+}
+
+model StoreCatalogueScan {
+  id          String    @id @default(cuid())
+  workspaceId String
+  status      String    @default("RUNNING")
+  page        Int       @default(1)
+  perPage     Int       @default(100)
+  imported    Int       @default(0)
+  total       Int?
+  readOnly    Boolean   @default(true)
+  stats       Json?
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+  error       String?
+
+  workspace Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  items     StoreCatalogueItem[]
+
+  @@index([workspaceId, status])
+}
+
+model StoreCatalogueItem {
+  id                       String    @id @default(cuid())
+  workspaceId              String
+  scanId                   String
+  storeProductId           String
+  sku                      String    @default("")
+  skuKey                   String    @default("")
+  manufacturerPartNumber   String    @default("")
+  mpnKey                   String    @default("")
+  barcode                  String    @default("")
+  barcodeKey               String    @default("")
+  name                     String
+  brand                    String    @default("")
+  brandModelKey            String    @default("")
+  category                 String    @default("")
+  unitPriceCents           Int
+  salePriceCents           Int?
+  currency                 String    @default("ZAR")
+  stockQuantity            Int       @default(0)
+  stockStatus              String    @default("")
+  description              String    @default("")
+  specifications           String    @default("")
+  imageUrls                String[]  @default([])
+  published                Boolean   @default(false)
+  slug                     String    @default("")
+  url                      String    @default("")
+  storeUpdatedAt           DateTime?
+  reviewStatus             String    @default("BASELINE")
+  reviewNote               String    @default("")
+  duplicateKinds           String    @default("")
+  mergedIntoStoreProductId String    @default("")
+  productId                String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  scan      StoreCatalogueScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  product   Product?           @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, storeProductId])
+  @@index([workspaceId, skuKey])
+  @@index([workspaceId, mpnKey])
+  @@index([workspaceId, barcodeKey])
+  @@index([workspaceId, brandModelKey])
+  @@index([scanId])
+  @@index([productId])
+}
+
+model CatalogueAudit {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  action         String
+  storeProductId String   @default("")
+  summary        String
+  createdAt      DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
 }

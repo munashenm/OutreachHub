@@ -4,6 +4,7 @@ export type ActionState = {
   fieldErrors?: Record<string, string>;
   devResetUrl?: string;
   draft?: { subject: string; body: string };
+  pending?: boolean;
 };
 
 export const initialActionState: ActionState = {};

@@ -6,13 +6,13 @@ export function createUrbanFocusStore(credentials: StoreCredentials): StoreProvi
   const base = assertPublicHttpsUrl(credentials.apiBaseUrl);
   const token = credentials.token;
 
-  async function request(path: string, search: Record<string, string>, init?: RequestInit) {
+  async function request(path: string, search: Record<string, string>, init?: RequestInit, timeoutMs = 20000) {
     const url = new URL(path.replace(/^\//, ""), `${base.origin}${base.pathname.replace(/\/$/, "")}/`);
     for (const [key, value] of Object.entries(search)) url.searchParams.set(key, value);
     const response = await fetch(url, {
       ...init,
       redirect: "manual",
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(timeoutMs),
       headers: {
         accept: "application/json",
         "content-type": "application/json",
@@ -72,6 +72,24 @@ export function createUrbanFocusStore(credentials: StoreCredentials): StoreProvi
       const response = await request("orders", { limit: String(limit) });
       if (!response.ok) throw new AppError(`The store returned ${response.status}.`);
       return response.json() as Promise<unknown>;
+    },
+    async listCatalogue(page: number, perPage: number) {
+      const response = await request("catalogue", { page: String(page), per_page: String(perPage) }, undefined, 60000);
+      if (response.status === 404) throw new AppError("The store catalogue list is not on the website yet. Deploy the website update, then read the catalogue again.");
+      if (!response.ok) throw new AppError(`The store returned ${response.status}.`);
+      return response.json() as Promise<unknown>;
+    },
+    async findByIdentity(query: { sku?: string; mpn?: string; barcode?: string }) {
+      const search: Record<string, string> = {};
+      if (query.sku?.trim()) search.sku = query.sku.trim();
+      if (query.mpn?.trim()) search.mpn = query.mpn.trim();
+      if (query.barcode?.trim()) search.barcode = query.barcode.trim();
+      if (Object.keys(search).length === 0) return null;
+      const response = await request("lookup", search);
+      if (response.status === 404) return null;
+      if (!response.ok) throw new AppError(`The store returned ${response.status}.`);
+      const body = await response.json() as { sku?: string | null };
+      return body.sku ? { sku: body.sku } : null;
     },
   };
 }

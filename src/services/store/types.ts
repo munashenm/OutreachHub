@@ -25,4 +25,6 @@ export interface StoreProvider {
   updateImages(sku: string, imageUrls: string[]): Promise<void>;
   setPublished(sku: string, published: boolean): Promise<void>;
   listOrders(limit: number): Promise<unknown>;
+  listCatalogue(page: number, perPage: number): Promise<unknown>;
+  findByIdentity(query: { sku?: string; mpn?: string; barcode?: string }): Promise<{ sku: string } | null>;
 }

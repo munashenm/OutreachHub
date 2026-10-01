@@ -6,6 +6,7 @@ export const NAV_ITEMS = [
   { href: "/inbox", label: "Inbox", icon: "inbox" },
   { href: "/rfqs", label: "RFQs", icon: "rfqs" },
   { href: "/products", label: "Products", icon: "products" },
+  { href: "/catalogue", label: "Catalogue", icon: "catalogue" },
   { href: "/orders", label: "Orders", icon: "orders" },
   { href: "/suppliers", label: "Suppliers", icon: "suppliers" },
   { href: "/pipeline", label: "Pipeline", icon: "pipeline" },

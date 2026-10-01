@@ -1,7 +1,8 @@
 import { Prisma } from "../generated/prisma/client";
 import { getDb, type DbClient } from "../lib/db";
 import { AppError } from "../lib/errors";
-import { assertPublicHttpsUrl, markedUpCents, priceAllowedByMargin, stockLeft, stockLevel } from "../lib/stock";
+import { matchStoreProduct } from "../lib/catalogue-reconcile";
+import { assertPublicHttpsUrl, markedUpCents, priceAllowedByMargin, stockLeft } from "../lib/stock";
 import {
   chooseSupplierOffer,
   exclusiveCostCents,
@@ -11,12 +12,14 @@ import {
   parseXmlOffers,
   priceChangeNeedsApproval,
   readFieldMapping,
+  selectedSupplierStock,
   type SupplierFieldMapping,
   type SupplierOffer,
 } from "../lib/supplier-connector";
 import { decryptSecret, encryptSecret } from "../lib/token-crypto";
 import { recordActivity } from "./activity-service";
-import { createStoreProvider, type StoreCatalogProduct } from "./store";
+import { baselineIdentities } from "./catalogue-service";
+import { loadStoreProvider } from "./store/load";
 import type { Actor } from "./types";
 
 const BATCH = 40;
@@ -193,29 +196,7 @@ export async function saveStoreConnection(actor: Actor, input: {
 }
 
 async function storeProviderFor(workspaceId: string) {
-  const workspace = await getDb().workspace.findFirst({
-    where: { id: workspaceId },
-    select: {
-      id: true,
-      storeName: true,
-      storePublicUrl: true,
-      storeBaseUrl: true,
-      storeProvider: true,
-      storeKeyEncrypted: true,
-      minimumMarginPercent: true,
-      storeLastSyncAt: true,
-    },
-  });
-  if (!workspace?.storeName || !workspace.storePublicUrl || !workspace.storeBaseUrl || !workspace.storeKeyEncrypted) {
-    return null;
-  }
-  return {
-    workspace,
-    provider: createStoreProvider(workspace.storeProvider, {
-      apiBaseUrl: workspace.storeBaseUrl,
-      token: decryptSecret(workspace.storeKeyEncrypted),
-    }),
-  };
+  return loadStoreProvider(workspaceId);
 }
 
 export async function testStoreConnection(workspaceId: string) {
@@ -239,7 +220,7 @@ export async function fetchStoreOrders(workspaceId: string) {
 
 export async function pushStoreStock(workspaceId: string) {
   const loaded = await storeProviderFor(workspaceId);
-  if (!loaded) return { pushed: 0, pricesHeld: 0, pending: false };
+  if (!loaded) return { pushed: 0, pricesHeld: 0, pending: false, skippedNew: 0 };
   const products = await getDb().product.findMany({
     where: { workspaceId, updatedAt: { gt: loaded.workspace.storeLastSyncAt ?? new Date(0) } },
     orderBy: { updatedAt: "asc" },
@@ -250,34 +231,51 @@ export async function pushStoreStock(workspaceId: string) {
   const alternateSkus = await supplierSkusByProduct(workspaceId, productIds);
   let pushed = 0;
   let pricesHeld = 0;
+  let skippedNew = 0;
   let cursor = loaded.workspace.storeLastSyncAt;
   const reserved = await reservedByProduct(workspaceId);
+  const baseline = await baselineIdentities(workspaceId);
   try {
     for (const product of products) {
       const available = stockLeft(product.stockOnHand, reserved.get(product.id) ?? 0);
       const cost = costs.get(product.id) ?? 0;
       const priceAllowed = priceAllowedByMargin(cost, product.unitPriceCents, loaded.workspace.minimumMarginPercent);
-      const payload = catalogPayload(product, available);
-      const matchedSku = await findStoreSku(loaded.provider, product.sku, alternateSkus.get(product.id) ?? []);
+      const alternate = alternateSkus.get(product.id) ?? [];
+      let matchedSku = await findStoreSku(loaded.provider, product.sku, alternate);
       if (!matchedSku) {
-        if (!priceAllowed) {
-          pricesHeld += 1;
-          cursor = product.updatedAt;
-          continue;
-        }
-        await loaded.provider.createProduct(payload);
-      } else {
-        await loaded.provider.updateStock(matchedSku, available);
-        await loaded.provider.updateContent(matchedSku, {
-          name: product.name,
-          description: product.description,
-          specifications: product.specifications,
+        const identity = await loaded.provider.findByIdentity({
+          sku: product.sku,
+          mpn: product.manufacturerPartNumber,
+          barcode: product.barcode,
         });
-        if (product.imageUrls.length > 0) await loaded.provider.updateImages(matchedSku, product.imageUrls);
-        await loaded.provider.setPublished(matchedSku, product.active);
-        if (priceAllowed) await loaded.provider.updatePrice(matchedSku, product.unitPriceCents, product.currency);
-        else pricesHeld += 1;
+        if (identity) matchedSku = identity.sku;
       }
+      if (!matchedSku && baseline) {
+        const decision = matchStoreProduct({
+          sku: product.sku,
+          manufacturerPartNumber: product.manufacturerPartNumber,
+          barcode: product.barcode,
+          brand: product.brand,
+          name: product.name,
+          supplierSku: alternate[0],
+        }, baseline.items, baseline.confirmed);
+        if (decision.outcome === "MATCHED") matchedSku = decision.sku;
+      }
+      if (!matchedSku) {
+        skippedNew += 1;
+        cursor = product.updatedAt;
+        continue;
+      }
+      await loaded.provider.updateStock(matchedSku, available);
+      await loaded.provider.updateContent(matchedSku, {
+        name: product.name,
+        description: product.description,
+        specifications: product.specifications,
+      });
+      if (product.imageUrls.length > 0) await loaded.provider.updateImages(matchedSku, product.imageUrls);
+      await loaded.provider.setPublished(matchedSku, product.active);
+      if (priceAllowed) await loaded.provider.updatePrice(matchedSku, product.unitPriceCents, product.currency);
+      else pricesHeld += 1;
       pushed += 1;
       cursor = product.updatedAt;
     }
@@ -293,7 +291,7 @@ export async function pushStoreStock(workspaceId: string) {
     });
     throw error instanceof AppError ? error : new AppError(message);
   }
-  return { pushed, pricesHeld, pending: products.length === BATCH };
+  return { pushed, pricesHeld, pending: products.length === BATCH, skippedNew };
 }
 
 async function supplierSkusByProduct(workspaceId: string, productIds: string[]) {
@@ -318,20 +316,6 @@ async function findStoreSku(provider: { findProductBySku(sku: string): Promise<{
     if (found) return found.sku;
   }
   return null;
-}
-
-function catalogPayload(product: { sku: string; name: string; description: string; specifications: string; imageUrls: string[]; unitPriceCents: number; currency: string; active: boolean }, stockQuantity: number): StoreCatalogProduct {
-  return {
-    sku: product.sku,
-    name: product.name,
-    description: product.description,
-    specifications: product.specifications,
-    unitPriceCents: product.unitPriceCents,
-    currency: product.currency,
-    stockQuantity,
-    published: product.active,
-    imageUrls: product.imageUrls,
-  };
 }
 
 export async function supplierTrackedProductIds(workspaceId: string) {
@@ -591,8 +575,18 @@ async function applyFeed(
     });
     const data: { stockOnHand?: number; unitPriceCents?: number; pendingUnitPriceCents?: number | null; priceChangeFlagged?: boolean } = {};
     if (options.applyStock) {
-      const fresh = rows.filter((row) => row.stockKnown && freshFor(row.updatedAt, row.supplier.stockSyncIntervalMinutes, now));
-      if (fresh.length > 0) data.stockOnHand = stockLevel(fresh.map((row) => row.stockQty));
+      const chosenQty = selectedSupplierStock(rows.map((row) => ({
+        supplierId: row.supplierId,
+        costCents: row.costCents,
+        costKnown: row.costKnown,
+        stockQty: row.stockQty,
+        stockKnown: row.stockKnown,
+        updatedAt: row.updatedAt,
+        preference: row.supplier.preference,
+        leadTimeDays: row.leadTimeDays ?? row.supplier.leadTimeDays,
+        priceFreshMs: row.supplier.stockSyncIntervalMinutes * 60 * 1000,
+      })), now);
+      if (chosenQty !== null) data.stockOnHand = chosenQty;
     }
     if (options.applyPrice) {
       const chosen = chooseSupplierOffer(rows.map((row) => ({
@@ -753,10 +747,6 @@ function readLeadTime(value: string) {
 function due(last: Date | null, minutes: number, now: Date) {
   if (!last) return true;
   return now.getTime() - last.getTime() >= minutes * 60 * 1000;
-}
-
-function freshFor(updatedAt: Date, minutes: number, now: Date) {
-  return now.getTime() - updatedAt.getTime() <= minutes * 60 * 1000;
 }
 
 function parseJsonText(text: string, mapping: SupplierFieldMapping) {

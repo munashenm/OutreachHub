@@ -61,7 +61,8 @@ export async function pushStoreStockAction(): Promise<ActionState> {
     const result = await pushStoreStock(session.workspace.id);
     revalidatePath("/settings");
     const held = result.pricesHeld > 0 ? ` ${result.pricesHeld} prices were not sent because they were below the minimum margin.` : "";
-    if (!result.pending && result.pushed === 0 && result.pricesHeld === 0) return { success: "No catalogue changes are waiting for the store." };
-    return { success: `Sent ${result.pushed} products to the store.${held}${result.pending ? " More products are still waiting." : ""}` };
+    const skipped = result.skippedNew > 0 ? ` ${result.skippedNew} products were not created, because the website catalogue is the baseline.` : "";
+    if (!result.pending && result.pushed === 0 && result.pricesHeld === 0 && result.skippedNew === 0) return { success: "No catalogue changes are waiting for the store." };
+    return { success: `Sent ${result.pushed} products to the store.${held}${skipped}${result.pending ? " More products are still waiting." : ""}` };
   });
 }
