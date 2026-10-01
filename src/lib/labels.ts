@@ -130,6 +130,7 @@ export const RFQ_STATUSES = [
   "READY_TO_QUOTE",
   "QUOTE_PREPARED",
   "QUOTE_SENT",
+  "NEGOTIATION",
   "WON",
   "LOST",
 ] as const;
@@ -143,6 +144,7 @@ export const RFQ_STATUS_LABELS: Record<RfqStatus, string> = {
   READY_TO_QUOTE: "Ready to quote",
   QUOTE_PREPARED: "Quote prepared",
   QUOTE_SENT: "Quote sent",
+  NEGOTIATION: "Negotiation",
   WON: "Won",
   LOST: "Lost",
 };

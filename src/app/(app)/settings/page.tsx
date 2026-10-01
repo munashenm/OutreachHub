@@ -43,7 +43,7 @@ export default async function SettingsPage({
       </Panel>
       <Panel className="p-5">
         <h2 className="font-semibold">Store integration</h2>
-        <p className="mt-1 mb-4 text-sm text-muted">The website catalogue is the baseline. Read it from Catalogue before sending changes. Sending updates a product that already exists and does not create a second one. Supplier cost stays off the website, and a price below the minimum margin is not sent.</p>
+        <p className="mt-1 mb-4 text-sm text-muted">The website catalogue is the baseline. A matching product is updated. A new website product is created only after the duplicate check, price, content, and image rules pass. Supplier cost stays off the website.</p>
         <p className="mb-3 text-sm">Connection status: {store?.status ?? "Not connected"}</p>
         {store?.lastError ? <p className="mb-3 text-sm text-red-700">Last error: {store.lastError}</p> : null}
         <p className="mb-3 text-sm text-muted">Last successful sync: {store?.lastSyncAt ? formatDateTime(store.lastSyncAt) : "None yet"}</p>
@@ -52,6 +52,8 @@ export default async function SettingsPage({
           storeUrl={store?.storeUrl ?? ""}
           apiBaseUrl={store?.apiBaseUrl ?? ""}
           minimumMarginPercent={store?.minimumMarginPercent ?? 0}
+          autoQuoteMarginPercent={store?.autoQuoteMarginPercent ?? 15}
+          autoSendMarginPercent={store?.autoSendMarginPercent ?? 25}
           connected={store?.connected ?? false}
         />
       </Panel>

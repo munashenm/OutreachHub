@@ -112,6 +112,7 @@ enum RfqStatus {
   READY_TO_QUOTE
   QUOTE_PREPARED
   QUOTE_SENT
+  NEGOTIATION
   WON
   LOST
 }
@@ -158,6 +159,8 @@ model Workspace {
   storeKeyEncrypted      String?
   storeSecretEncrypted   String?
   minimumMarginPercent   Int       @default(0)
+  autoQuoteMarginPercent Int       @default(15)
+  autoSendMarginPercent  Int       @default(25)
   storeLastSyncAt        DateTime?
   storeLastError         String?
   createdAt           DateTime  @default(now())
@@ -423,6 +426,7 @@ model Message {
   externalId        String?
   threadId          String?
   sentAt            DateTime?
+  automationAt      DateTime?
   createdAt         DateTime         @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -446,6 +450,11 @@ model Rfq {
   subject         String
   description     String    @default("")
   notes           String    @default("")
+  customerReference String @default("")
+  deliveryLocation  String @default("")
+  requiredDate      String @default("")
+  acknowledgementSentAt DateTime?
+  automationNote    String @default("")
   status          RfqStatus @default(NEW)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -455,10 +464,35 @@ model Rfq {
   company       Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
   sourceMessage Message   @relation(fields: [sourceMessageId], references: [id], onDelete: Cascade)
   quotes        Quote[]
+  lines         RfqLine[]
 
   @@index([workspaceId, status])
   @@index([workspaceId, createdAt])
   @@index([sourceMessageId])
+}
+
+model RfqLine {
+  id                     String   @id @default(cuid())
+  workspaceId            String
+  rfqId                  String
+  description            String
+  quantity               Decimal? @db.Decimal(12, 2)
+  manufacturer           String   @default("")
+  modelName              String   @default("")
+  sku                    String   @default("")
+  manufacturerPartNumber String   @default("")
+  specifications         String   @default("")
+  matchStatus            String   @default("NEEDS_PRODUCT_REVIEW")
+  matchNote              String   @default("")
+  productId              String?
+  storeProductId         String   @default("")
+
+  rfq     Rfq      @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([rfqId])
+  @@index([productId])
 }
 
 enum QuoteStatus {
@@ -483,6 +517,11 @@ model Product {
   manufacturerPartNumber String   @default("")
   barcode                String   @default("")
   brand                  String   @default("")
+  categoryName           String   @default("")
+  slug                   String   @default("")
+  seoTitle               String   @default("")
+  metaDescription        String   @default("")
+  reviewStatus           String   @default("")
   storeProductId         String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -492,6 +531,7 @@ model Product {
   supplierPrices SupplierPrice[]
   storeOrderLines StoreOrderLine[]
   catalogueItems StoreCatalogueItem[]
+  rfqLines       RfqLine[]
 
   @@unique([workspaceId, sku])
   @@index([workspaceId, active])
@@ -574,11 +614,13 @@ model Supplier {
   vatMode                SupplierVatMode   @default(EXCLUSIVE)
   stockSyncIntervalMinutes Int             @default(60)
   priceSyncIntervalMinutes Int             @default(60)
+  catalogueSyncIntervalMinutes Int        @default(60)
   preference             Int               @default(0)
   leadTimeDays           Int?
   fieldMapping           Json?
   lastStockSyncAt        DateTime?
   lastPriceSyncAt        DateTime?
+  lastCatalogueSyncAt    DateTime?
   lastStockSyncError     String?
   createdAt              DateTime @default(now())
   updatedAt   DateTime @updatedAt

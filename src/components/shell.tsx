@@ -184,6 +184,7 @@ export function AppShell({ children, workspace, user, memberships, notifications
 function NavIconSvg({ name }: { name: NavIcon }) {
   const paths: Record<NavIcon, string> = {
     dashboard: "M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z",
+    automation: "M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1",
     prospects: "M16 19v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M9.5 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM20 8v6M17 11h6",
     companies: "M3 21h18M5 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16M15 21V9h4a2 2 0 0 1 2 2v10",
     campaigns: "M4 6h16M4 12h10M4 18h7",

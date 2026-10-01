@@ -88,8 +88,8 @@ export function createUrbanFocusStore(credentials: StoreCredentials): StoreProvi
       const response = await request("lookup", search);
       if (response.status === 404) return null;
       if (!response.ok) throw new AppError(`The store returned ${response.status}.`);
-      const body = await response.json() as { sku?: string | null };
-      return body.sku ? { sku: body.sku } : null;
+      const body = await response.json() as { sku?: string | null; storeProductId?: string };
+      return body.sku ? { sku: body.sku, storeProductId: body.storeProductId } : null;
     },
   };
 }

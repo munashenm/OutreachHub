@@ -21,6 +21,7 @@ export function SupplierFeedForm({
   vatMode,
   stockSyncIntervalMinutes,
   priceSyncIntervalMinutes,
+  catalogueSyncIntervalMinutes,
   preference,
   leadTimeDays,
   mapping,
@@ -36,6 +37,7 @@ export function SupplierFeedForm({
   vatMode: "INCLUSIVE" | "EXCLUSIVE";
   stockSyncIntervalMinutes: number;
   priceSyncIntervalMinutes: number;
+  catalogueSyncIntervalMinutes: number;
   preference: number;
   leadTimeDays: number | null;
   mapping: SupplierFieldMapping;
@@ -107,6 +109,9 @@ export function SupplierFeedForm({
         </Field>
         <Field label="Price sync interval (minutes)" name="priceSyncIntervalMinutes">
           <input id="priceSyncIntervalMinutes" name="priceSyncIntervalMinutes" type="number" min={60} max={10080} defaultValue={priceSyncIntervalMinutes} required className={inputClass} />
+        </Field>
+        <Field label="Catalogue sync interval (minutes)" name="catalogueSyncIntervalMinutes">
+          <input id="catalogueSyncIntervalMinutes" name="catalogueSyncIntervalMinutes" type="number" min={60} max={10080} defaultValue={catalogueSyncIntervalMinutes} required className={inputClass} />
         </Field>
         <Field label="Preference" name="preference">
           <input id="preference" name="preference" type="number" min={0} max={100} defaultValue={preference} required className={inputClass} />

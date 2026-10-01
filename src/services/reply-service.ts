@@ -78,7 +78,7 @@ export async function sendThreadReply(actor: Actor, input: { messageId: string; 
     });
     await recordActivity(tx, {
       workspaceId: actor.workspaceId,
-      actorId: actor.userId,
+      actorId: actor.userId === "system" ? null : actor.userId,
       prospectId: original.prospectId,
       campaignId: original.campaignId,
       type: "EMAIL_SENT",

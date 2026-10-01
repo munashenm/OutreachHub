@@ -199,6 +199,7 @@ export const supplierFeedSchema = z.object({
   vatMode: z.enum(["INCLUSIVE", "EXCLUSIVE"]),
   stockSyncIntervalMinutes: z.coerce.number().int().min(60).max(10080),
   priceSyncIntervalMinutes: z.coerce.number().int().min(60).max(10080),
+  catalogueSyncIntervalMinutes: z.coerce.number().int().min(60).max(10080),
   preference: z.coerce.number().int().min(0).max(100),
   leadTimeDays: z.string().trim().max(4).optional().default(""),
   productElement: z.string().trim().max(80).optional().default(""),
@@ -221,6 +222,8 @@ export const storeConnectionSchema = z.object({
   apiBaseUrl: z.string().trim().max(500).optional().default(""),
   apiKey: z.string().trim().max(500).optional().default(""),
   minimumMarginPercent: z.coerce.number().int().min(0).max(90),
+  autoQuoteMarginPercent: z.coerce.number().int().min(0).max(90),
+  autoSendMarginPercent: z.coerce.number().int().min(0).max(90),
 });
 
 export const supplierSchema = z.object({
@@ -270,7 +273,7 @@ export const replySchema = z.object({
 
 export const rfqUpdateSchema = z.object({
   id: z.string().trim().min(1),
-  status: z.enum(["NEW", "REVIEWING", "NEEDS_INFORMATION", "READY_TO_QUOTE", "QUOTE_PREPARED", "QUOTE_SENT", "WON", "LOST"]),
+  status: z.enum(["NEW", "REVIEWING", "NEEDS_INFORMATION", "READY_TO_QUOTE", "QUOTE_PREPARED", "QUOTE_SENT", "NEGOTIATION", "WON", "LOST"]),
   notes: z.string().trim().max(10000).optional().default(""),
 });
 

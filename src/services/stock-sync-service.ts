@@ -1,7 +1,8 @@
 import { Prisma } from "../generated/prisma/client";
-import { getDb, type DbClient } from "../lib/db";
+import { getDb, isUniqueViolation, type DbClient } from "../lib/db";
 import { AppError } from "../lib/errors";
-import { matchStoreProduct } from "../lib/catalogue-reconcile";
+import { acceptProductImage, newProductDecision, seoFromProduct } from "../lib/automation";
+import { matchStoreProduct, skuKey } from "../lib/catalogue-reconcile";
 import { assertPublicHttpsUrl, markedUpCents, priceAllowedByMargin, stockLeft } from "../lib/stock";
 import {
   chooseSupplierOffer,
@@ -39,6 +40,7 @@ type FeedSettings = {
   vatMode: "INCLUSIVE" | "EXCLUSIVE";
   stockSyncIntervalMinutes: number;
   priceSyncIntervalMinutes: number;
+  catalogueSyncIntervalMinutes: number;
   preference: number;
   leadTimeDays: string;
   productElement: string;
@@ -89,6 +91,7 @@ export async function saveSupplierFeed(actor: Actor, input: FeedSettings) {
       vatMode: input.vatMode,
       stockSyncIntervalMinutes: input.stockSyncIntervalMinutes,
       priceSyncIntervalMinutes: input.priceSyncIntervalMinutes,
+      catalogueSyncIntervalMinutes: input.catalogueSyncIntervalMinutes,
       preference: input.preference,
       leadTimeDays,
       fieldMapping: Object.keys(mapping).length === 0 ? Prisma.JsonNull : mapping,
@@ -103,7 +106,8 @@ export async function syncSupplierFeed(actor: Actor, supplierId: string, options
   const now = new Date();
   const stockDue = due(supplier.lastStockSyncAt, supplier.stockSyncIntervalMinutes, now);
   const priceDue = due(supplier.lastPriceSyncAt, supplier.priceSyncIntervalMinutes, now);
-  if (options?.respectInterval && !stockDue && !priceDue) {
+  const catalogueDue = due(supplier.lastCatalogueSyncAt, supplier.catalogueSyncIntervalMinutes, now);
+  if (options?.respectInterval && !stockDue && !priceDue && !catalogueDue) {
     return { updated: 0, unmatched: 0, pricesHeld: 0, priceChangesFlagged: 0, skipped: true };
   }
   const applyStock = options?.respectInterval ? stockDue : true;
@@ -117,6 +121,7 @@ export async function syncSupplierFeed(actor: Actor, supplierId: string, options
       data: {
         ...(applyStock ? { lastStockSyncAt: now } : {}),
         ...(applyPrice ? { lastPriceSyncAt: now } : {}),
+        lastCatalogueSyncAt: now,
         lastStockSyncError: null,
       },
     });
@@ -140,6 +145,8 @@ export async function getStoreConnection(workspaceId: string) {
       storeBaseUrl: true,
       storeKeyEncrypted: true,
       minimumMarginPercent: true,
+      autoQuoteMarginPercent: true,
+      autoSendMarginPercent: true,
       storeLastSyncAt: true,
       storeLastError: true,
     },
@@ -150,7 +157,9 @@ export async function getStoreConnection(workspaceId: string) {
     storeName: workspace.storeName ?? "",
     storeUrl: workspace.storePublicUrl ?? "",
     apiBaseUrl: workspace.storeBaseUrl ?? "",
-    minimumMarginPercent: workspace.minimumMarginPercent,
+  minimumMarginPercent: workspace.minimumMarginPercent,
+    autoQuoteMarginPercent: workspace.autoQuoteMarginPercent,
+    autoSendMarginPercent: workspace.autoSendMarginPercent,
     connected,
     status: !connected ? "Not connected" : workspace.storeLastError ? "Error" : "Connected",
     lastSyncAt: workspace.storeLastSyncAt,
@@ -164,6 +173,8 @@ export async function saveStoreConnection(actor: Actor, input: {
   apiBaseUrl: string;
   apiKey: string;
   minimumMarginPercent: number;
+  autoQuoteMarginPercent: number;
+  autoSendMarginPercent: number;
 }) {
   const workspace = await getDb().workspace.findFirst({
     where: { id: actor.workspaceId },
@@ -190,6 +201,8 @@ export async function saveStoreConnection(actor: Actor, input: {
       storeKeyEncrypted: clearing ? null : storeKeyEncrypted,
       storeSecretEncrypted: null,
       minimumMarginPercent: input.minimumMarginPercent,
+      autoQuoteMarginPercent: input.autoQuoteMarginPercent,
+      autoSendMarginPercent: input.autoSendMarginPercent,
       storeLastError: null,
     },
   });
@@ -261,6 +274,39 @@ export async function pushStoreStock(workspaceId: string) {
         }, baseline.items, baseline.confirmed);
         if (decision.outcome === "MATCHED") matchedSku = decision.sku;
       }
+      if (!matchedSku && product.reviewStatus === "PUBLISH") {
+        try {
+          await loaded.provider.createProduct({
+            sku: product.sku,
+            name: product.name,
+            description: product.description,
+            specifications: product.specifications,
+            unitPriceCents: product.unitPriceCents,
+            currency: product.currency,
+            stockQuantity: available,
+            published: true,
+            imageUrls: product.imageUrls,
+            manufacturerPartNumber: product.manufacturerPartNumber,
+            barcode: product.barcode,
+            brand: product.brand,
+            category: product.categoryName,
+            seoTitle: product.seoTitle,
+            metaDescription: product.metaDescription,
+            slug: product.slug,
+          });
+          const createdIdentity = await loaded.provider.findByIdentity({ sku: product.sku, mpn: product.manufacturerPartNumber, barcode: product.barcode });
+          matchedSku = createdIdentity?.sku ?? product.sku;
+          if (createdIdentity?.storeProductId) {
+            await getDb().product.update({ where: { id: product.id }, data: { storeProductId: createdIdentity.storeProductId, reviewStatus: "" } });
+          }
+        } catch (error) {
+          const message = error instanceof AppError ? error.message : "";
+          if (!message.includes("already exists")) throw error;
+          const existing = await loaded.provider.findByIdentity({ sku: product.sku, mpn: product.manufacturerPartNumber, barcode: product.barcode });
+          if (!existing) throw error;
+          matchedSku = existing.sku;
+        }
+      }
       if (!matchedSku) {
         skippedNew += 1;
         cursor = product.updatedAt;
@@ -271,6 +317,8 @@ export async function pushStoreStock(workspaceId: string) {
         name: product.name,
         description: product.description,
         specifications: product.specifications,
+        seoTitle: product.seoTitle,
+        metaDescription: product.metaDescription,
       });
       if (product.imageUrls.length > 0) await loaded.provider.updateImages(matchedSku, product.imageUrls);
       await loaded.provider.setPublished(matchedSku, product.active);
@@ -504,10 +552,12 @@ async function applyFeed(
     }
   }
   const matched = new Map<string, SupplierOffer>();
+  const unmatchedOffers: SupplierOffer[] = [];
   let unmatched = 0;
   for (const offer of offers) {
     const productId = matchCatalogueOffer(offer, productBySku, productByMpn);
     if (!productId) {
+      unmatchedOffers.push(offer);
       unmatched += 1;
       continue;
     }
@@ -620,6 +670,7 @@ async function applyFeed(
       await getDb().product.update({ where: { id: productId }, data });
     }
   }
+  const created = await linkNewSupplierOffers(actor, supplierId, unmatchedOffers, minimumMarginPercent);
   if (!options.preserveMissing && touched.size > 0) {
     await recordActivity(getDb(), {
       workspaceId: actor.workspaceId,
@@ -628,7 +679,215 @@ async function applyFeed(
       summary: `Updated stock for ${touched.size} products.`,
     });
   }
-  return { updated: touched.size, unmatched, pricesHeld, priceChangesFlagged, skipped: false };
+  return { updated: touched.size + created, unmatched, pricesHeld, priceChangesFlagged, skipped: false };
+}
+
+async function linkNewSupplierOffers(actor: Actor, supplierId: string, offers: SupplierOffer[], minimumMarginPercent: number) {
+  if (offers.length === 0) return 0;
+  const supplier = await ownedSupplier(actor.workspaceId, supplierId);
+  const scan = await getDb().storeCatalogueScan.findFirst({
+    where: { workspaceId: actor.workspaceId, status: "COMPLETE" },
+    orderBy: { finishedAt: "desc" },
+    select: { id: true },
+  });
+  if (!scan) return 0;
+  const items = await getDb().storeCatalogueItem.findMany({
+    where: { workspaceId: actor.workspaceId, scanId: scan.id },
+    select: {
+      storeProductId: true, sku: true, skuKey: true, mpnKey: true, barcodeKey: true, brandModelKey: true, name: true,
+      brand: true, category: true, unitPriceCents: true, description: true, specifications: true, imageUrls: true, duplicateKinds: true,
+    },
+  });
+  const confirmedRows = await getDb().supplierPrice.findMany({
+    where: { workspaceId: actor.workspaceId, product: { storeProductId: { not: null } } },
+    select: { supplierSku: true, product: { select: { storeProductId: true } } },
+  });
+  const confirmed = new Map<string, string>();
+  for (const row of confirmedRows) {
+    const key = skuKey(row.supplierSku);
+    if (key && row.product.storeProductId && !confirmed.has(key)) confirmed.set(key, row.product.storeProductId);
+  }
+  let created = 0;
+  for (const offer of offers) {
+    const decision = matchStoreProduct({
+      sku: offer.supplierSku,
+      manufacturerPartNumber: offer.manufacturerPartNumber,
+      brand: offer.brand,
+      name: offer.name,
+      supplierSku: offer.supplierSku,
+    }, items, confirmed);
+    const duplicateBlocked = decision.outcome === "MATCH_REVIEW_REQUIRED";
+    const catalogueId = decision.outcome === "HIGH_CONFIDENCE_NEW" ? null : decision.storeProductId;
+    const catalogue = catalogueId ? items.find((item) => item.storeProductId === catalogueId) : null;
+    const sku = (catalogue?.sku || offer.supplierSku || offer.manufacturerPartNumber).trim();
+    if (!sku) continue;
+    const existing = await getDb().product.findFirst({
+      where: { workspaceId: actor.workspaceId, OR: [{ sku }, ...(catalogue?.storeProductId ? [{ storeProductId: catalogue.storeProductId }] : [])] },
+      select: { id: true },
+    });
+    let productId = existing?.id ?? null;
+    if (!productId && decision.outcome === "MATCHED" && catalogue) {
+      productId = await createStaffProduct(actor, {
+        sku,
+        name: catalogue.name,
+        brand: catalogue.brand,
+        categoryName: catalogue.category,
+        description: catalogue.description,
+        specifications: catalogue.specifications,
+        imageUrls: catalogue.imageUrls.filter((url) => acceptProductImage(url, { brand: catalogue.brand, sku, manufacturerPartNumber: offer.manufacturerPartNumber })),
+        unitPriceCents: catalogue.unitPriceCents,
+        stockOnHand: offer.stockQty ?? 0,
+        manufacturerPartNumber: offer.manufacturerPartNumber,
+        storeProductId: catalogue.storeProductId,
+        reviewStatus: catalogue.duplicateKinds.includes("barcode") ? "NEW_PRODUCT_REVIEW_REQUIRED" : "",
+        active: !catalogue.duplicateKinds.includes("barcode"),
+        seoTitle: "",
+        metaDescription: "",
+        slug: "",
+      });
+    } else if (!productId && decision.outcome !== "MATCHED") {
+      const images = offer.imageUrls.filter((url) => acceptProductImage(url, { brand: offer.brand, sku: offer.supplierSku, manufacturerPartNumber: offer.manufacturerPartNumber }));
+      const gate = newProductDecision({
+        matchedExisting: false,
+        duplicateBlocked,
+        sku: offer.supplierSku,
+        manufacturerPartNumber: offer.manufacturerPartNumber,
+        name: offer.name,
+        brand: offer.brand,
+        category: offer.category,
+        costCents: offer.costCents,
+        stockQty: offer.stockQty,
+        markupPercent: supplier.markupPercent,
+        minimumMarginPercent,
+        description: offer.description,
+        specifications: offer.specifications,
+        imageUrls: images,
+      });
+      const sell = offer.costCents != null ? markedUpCents(offer.costCents, supplier.markupPercent) : null;
+      const seo = seoFromProduct({
+        brand: offer.brand,
+        model: offer.manufacturerPartNumber || offer.supplierSku,
+        productType: offer.category || "Product",
+        category: offer.category,
+        specifications: offer.specifications,
+      });
+      productId = await createStaffProduct(actor, {
+        sku,
+        name: offer.name || sku,
+        brand: offer.brand,
+        categoryName: offer.category,
+        description: seo?.long || offer.description,
+        specifications: offer.specifications,
+        imageUrls: images,
+        unitPriceCents: gate === "PUBLISH" && sell != null ? sell : 0,
+        stockOnHand: offer.stockQty ?? 0,
+        manufacturerPartNumber: offer.manufacturerPartNumber,
+        storeProductId: null,
+        reviewStatus: gate,
+        active: gate === "PUBLISH",
+        seoTitle: seo?.title ?? "",
+        metaDescription: seo?.meta ?? "",
+        slug: seo?.slug ?? "",
+      });
+    }
+    if (!productId) continue;
+    await getDb().supplierPrice.upsert({
+      where: { supplierId_productId: { supplierId, productId } },
+      update: {
+        supplierSku: offer.supplierSku,
+        manufacturerPartNumber: offer.manufacturerPartNumber,
+        offerName: offer.name,
+        brand: offer.brand,
+        description: offer.description,
+        specifications: offer.specifications,
+        imageUrls: offer.imageUrls,
+        category: offer.category,
+        leadTimeDays: offer.leadTimeDays,
+        ...(offer.costCents != null ? { costCents: offer.costCents, costKnown: true } : { costKnown: false }),
+        ...(offer.stockQty != null ? { stockQty: offer.stockQty, stockKnown: true } : { stockKnown: false }),
+      },
+      create: {
+        workspaceId: actor.workspaceId,
+        supplierId,
+        productId,
+        supplierSku: offer.supplierSku,
+        manufacturerPartNumber: offer.manufacturerPartNumber,
+        offerName: offer.name,
+        brand: offer.brand,
+        description: offer.description,
+        specifications: offer.specifications,
+        imageUrls: offer.imageUrls,
+        category: offer.category,
+        leadTimeDays: offer.leadTimeDays,
+        costCents: offer.costCents ?? 0,
+        costKnown: offer.costCents != null,
+        stockQty: offer.stockQty ?? 0,
+        stockKnown: offer.stockQty != null,
+      },
+    });
+    created += 1;
+  }
+  return created;
+}
+
+async function createStaffProduct(actor: Actor, input: {
+  sku: string;
+  name: string;
+  brand: string;
+  categoryName: string;
+  description: string;
+  specifications: string;
+  imageUrls: string[];
+  unitPriceCents: number;
+  stockOnHand: number;
+  manufacturerPartNumber: string;
+  storeProductId: string | null;
+  reviewStatus: string;
+  active: boolean;
+  seoTitle: string;
+  metaDescription: string;
+  slug: string;
+}) {
+  try {
+    const product = await getDb().product.create({
+      data: {
+        workspaceId: actor.workspaceId,
+        sku: input.sku,
+        name: input.name.slice(0, 300) || input.sku,
+        brand: input.brand,
+        categoryName: input.categoryName,
+        description: input.description,
+        specifications: input.specifications,
+        imageUrls: input.imageUrls.slice(0, 8),
+        unitPriceCents: input.unitPriceCents,
+        stockOnHand: Math.max(0, input.stockOnHand),
+        manufacturerPartNumber: input.manufacturerPartNumber,
+        storeProductId: input.storeProductId,
+        reviewStatus: input.reviewStatus,
+        active: input.active,
+        seoTitle: input.seoTitle,
+        metaDescription: input.metaDescription,
+        slug: input.slug,
+      },
+      select: { id: true },
+    });
+    await recordActivity(getDb(), {
+      workspaceId: actor.workspaceId,
+      actorId: actor.userId === "system" ? null : actor.userId,
+      type: "PRODUCT_CREATED",
+      summary: input.reviewStatus === "PUBLISH"
+        ? `Prepared ${input.sku} for the website after the duplicate check.`
+        : `Held ${input.sku} for review. No website product was created.`,
+    });
+    return product.id;
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    const existing = await getDb().product.findFirst({
+      where: { workspaceId: actor.workspaceId, sku: input.sku },
+      select: { id: true },
+    });
+    return existing?.id ?? null;
+  }
 }
 
 async function readFeed(supplier: {

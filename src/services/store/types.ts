@@ -8,6 +8,13 @@ export type StoreCatalogProduct = {
   stockQuantity: number;
   published: boolean;
   imageUrls: string[];
+  manufacturerPartNumber?: string;
+  barcode?: string;
+  brand?: string;
+  category?: string;
+  seoTitle?: string;
+  metaDescription?: string;
+  slug?: string;
 };
 
 export type StoreCredentials = {
@@ -21,10 +28,10 @@ export interface StoreProvider {
   createProduct(product: StoreCatalogProduct): Promise<void>;
   updatePrice(sku: string, unitPriceCents: number, currency: string): Promise<void>;
   updateStock(sku: string, quantity: number): Promise<void>;
-  updateContent(sku: string, content: { name: string; description: string; specifications: string }): Promise<void>;
+  updateContent(sku: string, content: { name: string; description: string; specifications: string; seoTitle?: string; metaDescription?: string }): Promise<void>;
   updateImages(sku: string, imageUrls: string[]): Promise<void>;
   setPublished(sku: string, published: boolean): Promise<void>;
   listOrders(limit: number): Promise<unknown>;
   listCatalogue(page: number, perPage: number): Promise<unknown>;
-  findByIdentity(query: { sku?: string; mpn?: string; barcode?: string }): Promise<{ sku: string } | null>;
+  findByIdentity(query: { sku?: string; mpn?: string; barcode?: string }): Promise<{ sku: string; storeProductId?: string } | null>;
 }

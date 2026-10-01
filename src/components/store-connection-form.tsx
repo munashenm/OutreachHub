@@ -10,12 +10,16 @@ export function StoreConnectionForm({
   storeUrl,
   apiBaseUrl,
   minimumMarginPercent,
+  autoQuoteMarginPercent,
+  autoSendMarginPercent,
   connected,
 }: {
   storeName: string;
   storeUrl: string;
   apiBaseUrl: string;
   minimumMarginPercent: number;
+  autoQuoteMarginPercent: number;
+  autoSendMarginPercent: number;
   connected: boolean;
 }) {
   const [state, action, pending] = useActionState(saveStoreConnectionAction, initialActionState);
@@ -42,6 +46,12 @@ export function StoreConnectionForm({
         </Field>
         <Field label="Minimum margin percent" name="minimumMarginPercent">
           <input id="minimumMarginPercent" name="minimumMarginPercent" type="number" min={0} max={90} defaultValue={minimumMarginPercent} required className={inputClass} />
+        </Field>
+        <Field label="Auto-quote margin percent" name="autoQuoteMarginPercent">
+          <input id="autoQuoteMarginPercent" name="autoQuoteMarginPercent" type="number" min={0} max={90} defaultValue={autoQuoteMarginPercent} required className={inputClass} />
+        </Field>
+        <Field label="Auto-send margin percent" name="autoSendMarginPercent">
+          <input id="autoSendMarginPercent" name="autoSendMarginPercent" type="number" min={0} max={90} defaultValue={autoSendMarginPercent} required className={inputClass} />
         </Field>
         <button className={buttonSecondary} disabled={pending}>{pending ? "Saving..." : "Save store"}</button>
       </form>

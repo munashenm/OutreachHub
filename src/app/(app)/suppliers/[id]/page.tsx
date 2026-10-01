@@ -35,6 +35,7 @@ export default async function SupplierDetailPage({ params }: { params: Promise<{
           vatMode={supplier.vatMode}
           stockSyncIntervalMinutes={supplier.stockSyncIntervalMinutes}
           priceSyncIntervalMinutes={supplier.priceSyncIntervalMinutes}
+          catalogueSyncIntervalMinutes={supplier.catalogueSyncIntervalMinutes}
           preference={supplier.preference}
           leadTimeDays={supplier.leadTimeDays}
           mapping={readFieldMapping(supplier.fieldMapping)}

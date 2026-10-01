@@ -156,7 +156,7 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
     await tx.rfq.update({ where: { id: rfq.id }, data: { status: "QUOTE_SENT" } });
     await recordActivity(tx, {
       workspaceId: actor.workspaceId,
-      actorId: actor.userId,
+      actorId: actor.userId === "system" ? null : actor.userId,
       prospectId: rfq.prospectId,
       companyId: rfq.companyId,
       type: "QUOTE_SENT",
