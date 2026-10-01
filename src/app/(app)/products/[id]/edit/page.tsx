@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ProductForm } from "@/components/product-form";
+import { ApplyPendingPriceButton } from "@/components/apply-pending-price";
 import { Notice, PageHeader, Panel } from "@/components/ui";
 import { firstParam } from "@/lib/format";
-import { formatQuoteNumber } from "@/lib/quote";
+import { formatCents, formatQuoteNumber } from "@/lib/quote";
 import { stockLeft } from "@/lib/stock";
 import { requireSession } from "@/services/auth-service";
 import { centsToInput, getProduct } from "@/services/product-service";
@@ -30,7 +31,12 @@ export default async function EditProductPage({
     <div>
       <PageHeader title={product.name} actions={<Link href="/products" className="text-sm text-accent">Back</Link>} />
       {status === "created" ? <Notice tone="success">Product created.</Notice> : null}
-      <p className="mb-3 text-sm text-muted">Stock level: {product.stockOnHand}. Left after open quotations and open website orders: {left}. A supplier sync replaces the stock level. The sell price changes only when it stays at or above the minimum margin.</p>
+      <p className="mb-3 text-sm text-muted">Stock level: {product.stockOnHand}. Left after open quotations and open website orders: {left}. A supplier sync replaces the stock level from fresh offers. The sell price changes only when a fresh offer has stock and a cost, and the result stays at or above the minimum margin.</p>
+      {product.priceChangeFlagged && product.pendingUnitPriceCents != null ? (
+        <Panel className="mb-4 p-5">
+          <ApplyPendingPriceButton productId={product.id} label={formatCents(product.pendingUnitPriceCents, product.currency)} />
+        </Panel>
+      ) : null}
       <Panel className="mb-4 p-5">
         <h2 className="font-semibold">Holding this stock</h2>
         {holds.quotes.length === 0 && holds.orders.length === 0 ? (

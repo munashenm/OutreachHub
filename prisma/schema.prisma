@@ -471,10 +471,12 @@ model Product {
   description    String   @default("")
   specifications String   @default("")
   imageUrls      String[] @default([])
-  unitPriceCents Int
-  currency       String   @default("ZAR")
-  active         Boolean  @default(true)
-  stockOnHand    Int      @default(0)
+  unitPriceCents        Int
+  pendingUnitPriceCents Int?
+  priceChangeFlagged    Boolean  @default(false)
+  currency              String   @default("ZAR")
+  active                Boolean  @default(true)
+  stockOnHand           Int      @default(0)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -526,16 +528,47 @@ model QuoteLine {
   @@index([workspaceId])
 }
 
+enum SupplierFeedType {
+  JSON
+  XML
+  CSV_URL
+  MANUAL_CSV
+}
+
+enum SupplierAuthType {
+  NONE
+  BEARER
+  API_KEY_HEADER
+  BASIC
+}
+
+enum SupplierVatMode {
+  INCLUSIVE
+  EXCLUSIVE
+}
+
 model Supplier {
   id          String   @id @default(cuid())
   workspaceId String
   name        String
   email       String?
-  notes                  String   @default("")
-  markupPercent          Int      @default(0)
+  notes                  String            @default("")
+  markupPercent          Int               @default(0)
+  feedType               SupplierFeedType  @default(JSON)
+  feedEnabled            Boolean           @default(false)
   stockFeedUrl           String?
+  authType               SupplierAuthType  @default(NONE)
+  authHeaderName         String            @default("X-Api-Key")
+  authUsername           String            @default("")
   stockFeedKeyEncrypted  String?
+  vatMode                SupplierVatMode   @default(EXCLUSIVE)
+  stockSyncIntervalMinutes Int             @default(60)
+  priceSyncIntervalMinutes Int             @default(60)
+  preference             Int               @default(0)
+  leadTimeDays           Int?
+  fieldMapping           Json?
   lastStockSyncAt        DateTime?
+  lastPriceSyncAt        DateTime?
   lastStockSyncError     String?
   createdAt              DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -551,10 +584,20 @@ model SupplierPrice {
   workspaceId String
   supplierId  String
   productId   String
-  supplierSku String
-  costCents   Int
-  stockQty    Int      @default(0)
-  updatedAt   DateTime @updatedAt
+  supplierSku             String
+  manufacturerPartNumber String   @default("")
+  offerName               String   @default("")
+  brand                   String   @default("")
+  description             String   @default("")
+  specifications          String   @default("")
+  imageUrls               String[] @default([])
+  category                String   @default("")
+  leadTimeDays            Int?
+  costCents               Int
+  costKnown               Boolean  @default(true)
+  stockQty                Int      @default(0)
+  stockKnown              Boolean  @default(true)
+  updatedAt               DateTime @updatedAt
 
   supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
   product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)

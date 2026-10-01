@@ -10,20 +10,21 @@ export default async function SuppliersPage() {
     <div>
       <PageHeader
         title="Suppliers"
-        description="Upload a price file for products already in the catalogue. Unknown SKUs are skipped, and sell prices are not changed."
+        description="Add a supplier, then connect a JSON, XML, or CSV feed, or upload a CSV. Unknown products are skipped."
         actions={<Link className={buttonPrimary} href="/suppliers/new">New supplier</Link>}
       />
       <Panel>
         {suppliers.length === 0 ? (
-          <div className="p-4"><EmptyState title="No suppliers yet" description="Add a supplier, then import a CSV of sku, supplierSku, and cost." /></div>
+          <div className="p-4"><EmptyState title="No suppliers yet" description="Add a supplier, then save a JSON, XML, or CSV feed address, or upload a CSV." /></div>
         ) : (
           <table className="data-table">
-            <thead><tr><th>Name</th><th>Email</th><th>Prices</th></tr></thead>
+            <thead><tr><th>Name</th><th>Email</th><th>Feed</th><th>Prices</th></tr></thead>
             <tbody>
               {suppliers.map((supplier) => (
                 <tr key={supplier.id}>
                   <td><Link className="font-medium hover:underline" href={`/suppliers/${supplier.id}`}>{supplier.name}</Link></td>
                   <td>{supplier.email ?? "—"}</td>
+                  <td>{supplier.feedEnabled ? supplier.feedType : "Not active"}</td>
                   <td>{supplier._count.prices}</td>
                 </tr>
               ))}

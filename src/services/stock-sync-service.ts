@@ -1,6 +1,19 @@
+import { Prisma } from "../generated/prisma/client";
 import { getDb, type DbClient } from "../lib/db";
 import { AppError } from "../lib/errors";
-import { assertPublicHttpsUrl, markedUpCents, parseSupplierStockBody, priceAllowedByMargin, stockLeft, stockLevel } from "../lib/stock";
+import { assertPublicHttpsUrl, markedUpCents, priceAllowedByMargin, stockLeft, stockLevel } from "../lib/stock";
+import {
+  chooseSupplierOffer,
+  exclusiveCostCents,
+  matchCatalogueOffer,
+  parseCsvOffers,
+  parseJsonOffers,
+  parseXmlOffers,
+  priceChangeNeedsApproval,
+  readFieldMapping,
+  type SupplierFieldMapping,
+  type SupplierOffer,
+} from "../lib/supplier-connector";
 import { decryptSecret, encryptSecret } from "../lib/token-crypto";
 import { recordActivity } from "./activity-service";
 import { createStoreProvider, type StoreCatalogProduct } from "./store";
@@ -8,29 +21,101 @@ import type { Actor } from "./types";
 
 const BATCH = 40;
 
-export async function saveSupplierFeed(actor: Actor, input: { supplierId: string; markupPercent: number; stockFeedUrl: string; stockFeedKey: string }) {
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_.:-]*$/;
+
+type FeedSettings = {
+  supplierId: string;
+  markupPercent: number;
+  stockFeedUrl: string;
+  stockFeedKey: string;
+  authPassword: string;
+  feedType: "JSON" | "XML" | "CSV_URL" | "MANUAL_CSV";
+  authType: "NONE" | "BEARER" | "API_KEY_HEADER" | "BASIC";
+  authHeaderName: string;
+  authUsername: string;
+  vatMode: "INCLUSIVE" | "EXCLUSIVE";
+  stockSyncIntervalMinutes: number;
+  priceSyncIntervalMinutes: number;
+  preference: number;
+  leadTimeDays: string;
+  productElement: string;
+  mapSku: string;
+  mapMpn: string;
+  mapName: string;
+  mapBrand: string;
+  mapCost: string;
+  mapStock: string;
+  mapDescription: string;
+  mapSpecifications: string;
+  mapImages: string;
+  mapCategory: string;
+  mapLeadTime: string;
+};
+
+export async function saveSupplierFeed(actor: Actor, input: FeedSettings) {
   const supplier = await ownedSupplier(actor.workspaceId, input.supplierId);
-  const url = input.stockFeedUrl.trim();
+  const manual = input.feedType === "MANUAL_CSV";
+  const url = manual ? "" : input.stockFeedUrl.trim();
   if (url) publicUrl(url);
-  let stockFeedKeyEncrypted = supplier.stockFeedKeyEncrypted;
-  if (!url) stockFeedKeyEncrypted = null;
-  else if (input.stockFeedKey.trim()) stockFeedKeyEncrypted = sealKey(input.stockFeedKey.trim());
+  const leadTimeDays = readLeadTime(input.leadTimeDays);
+  const headerName = input.authHeaderName.trim() || "X-Api-Key";
+  if (input.authType === "API_KEY_HEADER" && !FIELD_NAME.test(headerName)) {
+    throw new AppError("Enter a header name such as X-Api-Key.");
+  }
+  const mapping = mappingFromInput(input);
+  for (const name of Object.values(mapping)) {
+    if (!FIELD_NAME.test(name)) throw new AppError("Field names can use letters, numbers, and hyphens.");
+  }
+  const existing = unpackCreds(supplier.stockFeedKeyEncrypted ? openKey(supplier.stockFeedKeyEncrypted) : null);
+  const token = input.stockFeedKey.trim() || existing.token;
+  const password = input.authPassword.trim() || existing.password;
+  const username = input.authUsername.trim();
+  const hasSecret = Boolean(token || password || username);
+  const stockFeedKeyEncrypted = !url || !hasSecret ? null : sealKey(JSON.stringify({ token, username, password }));
   await getDb().supplier.update({
     where: { id: supplier.id },
-    data: { markupPercent: input.markupPercent, stockFeedUrl: url || null, stockFeedKeyEncrypted },
+    data: {
+      markupPercent: input.markupPercent,
+      feedType: input.feedType,
+      feedEnabled: Boolean(url),
+      stockFeedUrl: url || null,
+      authType: input.authType,
+      authHeaderName: headerName,
+      authUsername: username,
+      stockFeedKeyEncrypted,
+      vatMode: input.vatMode,
+      stockSyncIntervalMinutes: input.stockSyncIntervalMinutes,
+      priceSyncIntervalMinutes: input.priceSyncIntervalMinutes,
+      preference: input.preference,
+      leadTimeDays,
+      fieldMapping: Object.keys(mapping).length === 0 ? Prisma.JsonNull : mapping,
+    },
   });
 }
 
-export async function syncSupplierFeed(actor: Actor, supplierId: string) {
+export async function syncSupplierFeed(actor: Actor, supplierId: string, options?: { respectInterval?: boolean }) {
   const supplier = await ownedSupplier(actor.workspaceId, supplierId);
-  if (!supplier.stockFeedUrl) throw new AppError("Add the supplier stock feed address first.");
+  if (supplier.feedType === "MANUAL_CSV") throw new AppError("This supplier uses a CSV file. Upload it on this page.");
+  if (!supplier.feedEnabled || !supplier.stockFeedUrl) throw new AppError("Add the supplier feed address first.");
+  const now = new Date();
+  const stockDue = due(supplier.lastStockSyncAt, supplier.stockSyncIntervalMinutes, now);
+  const priceDue = due(supplier.lastPriceSyncAt, supplier.priceSyncIntervalMinutes, now);
+  if (options?.respectInterval && !stockDue && !priceDue) {
+    return { updated: 0, unmatched: 0, pricesHeld: 0, priceChangesFlagged: 0, skipped: true };
+  }
+  const applyStock = options?.respectInterval ? stockDue : true;
+  const applyPrice = options?.respectInterval ? priceDue : true;
   try {
-    const parsed = await readFeed(supplier.stockFeedUrl, supplier.stockFeedKeyEncrypted);
+    const parsed = await readFeed(supplier);
     if (parsed.error) throw new AppError(parsed.error);
-    const result = await applyFeed(actor, supplier.id, parsed.items);
+    const result = await applyFeed(actor, supplier.id, parsed.offers, { applyPrice, applyStock });
     await getDb().supplier.update({
       where: { id: supplier.id },
-      data: { lastStockSyncAt: new Date(), lastStockSyncError: null },
+      data: {
+        ...(applyStock ? { lastStockSyncAt: now } : {}),
+        ...(applyPrice ? { lastPriceSyncAt: now } : {}),
+        lastStockSyncError: null,
+      },
     });
     return result;
   } catch (error) {
@@ -328,15 +413,15 @@ export async function queueStockForWebsite(db: DbClient, workspaceId: string, pr
 
 export async function syncAllStockFeeds() {
   const suppliers = await getDb().supplier.findMany({
-    where: { stockFeedUrl: { not: null } },
+    where: { feedEnabled: true, stockFeedUrl: { not: null }, feedType: { in: ["JSON", "XML", "CSV_URL"] } },
     select: { id: true, workspaceId: true },
   });
   const workspaces = new Set<string>();
   const results: { supplierId: string; updated?: number; error?: string }[] = [];
   for (const supplier of suppliers) {
-    workspaces.add(supplier.workspaceId);
     try {
-      const result = await syncSupplierFeed({ userId: "system", workspaceId: supplier.workspaceId }, supplier.id);
+      const result = await syncSupplierFeed({ userId: "system", workspaceId: supplier.workspaceId }, supplier.id, { respectInterval: true });
+      if (!result.skipped && result.updated > 0) workspaces.add(supplier.workspaceId);
       results.push({ supplierId: supplier.id, updated: result.updated });
     } catch (error) {
       results.push({ supplierId: supplier.id, error: error instanceof Error ? error.message : "Sync failed." });
@@ -357,23 +442,59 @@ async function lowestCostByProduct(workspaceId: string, productIds: string[]) {
   const costs = new Map<string, number>();
   if (productIds.length === 0) return costs;
   const rows = await getDb().supplierPrice.findMany({
-    where: { workspaceId, productId: { in: productIds }, costCents: { gt: 0 } },
-    select: { productId: true, costCents: true, stockQty: true },
+    where: { workspaceId, productId: { in: productIds } },
+    select: {
+      productId: true,
+      supplierId: true,
+      costCents: true,
+      costKnown: true,
+      stockQty: true,
+      stockKnown: true,
+      updatedAt: true,
+      leadTimeDays: true,
+      supplier: { select: { preference: true, leadTimeDays: true, priceSyncIntervalMinutes: true } },
+    },
   });
-  const inStock = new Map<string, number>();
+  const now = new Date();
+  const grouped = new Map<string, typeof rows>();
   for (const row of rows) {
-    const current = costs.get(row.productId);
-    if (current === undefined || row.costCents < current) costs.set(row.productId, row.costCents);
-    if (row.stockQty > 0) {
-      const stocked = inStock.get(row.productId);
-      if (stocked === undefined || row.costCents < stocked) inStock.set(row.productId, row.costCents);
-    }
+    const list = grouped.get(row.productId) ?? [];
+    list.push(row);
+    grouped.set(row.productId, list);
   }
-  for (const [productId, cost] of inStock) costs.set(productId, cost);
+  for (const [productId, offers] of grouped) {
+    const chosen = chooseSupplierOffer(offers.map((row) => ({
+      supplierId: row.supplierId,
+      costCents: row.costCents,
+      costKnown: row.costKnown,
+      stockQty: row.stockQty,
+      stockKnown: row.stockKnown,
+      updatedAt: row.updatedAt,
+      preference: row.supplier.preference,
+      leadTimeDays: row.leadTimeDays ?? row.supplier.leadTimeDays,
+      priceFreshMs: row.supplier.priceSyncIntervalMinutes * 60 * 1000,
+    })), 1, now);
+    if (chosen?.costCents != null) costs.set(productId, chosen.costCents);
+  }
   return costs;
 }
 
-async function applyFeed(actor: Actor, supplierId: string, items: { sku: string; costCents: number | null; stockQty: number }[]) {
+export async function saveSupplierOffers(
+  actor: Actor,
+  supplierId: string,
+  offers: SupplierOffer[],
+  options: { applyPrice: boolean; applyStock: boolean; preserveMissing?: boolean },
+) {
+  const supplier = await ownedSupplier(actor.workspaceId, supplierId);
+  return applyFeed(actor, supplier.id, offers, options);
+}
+
+async function applyFeed(
+  actor: Actor,
+  supplierId: string,
+  offers: SupplierOffer[],
+  options: { applyPrice: boolean; applyStock: boolean; preserveMissing?: boolean },
+) {
   const margin = await getDb().workspace.findFirst({
     where: { id: actor.workspaceId },
     select: { minimumMarginPercent: true },
@@ -381,64 +502,131 @@ async function applyFeed(actor: Actor, supplierId: string, items: { sku: string;
   const minimumMarginPercent = margin?.minimumMarginPercent ?? 0;
   const products = await getDb().product.findMany({
     where: { workspaceId: actor.workspaceId },
-    select: { id: true, sku: true },
+    select: { id: true, sku: true, unitPriceCents: true },
   });
-  const bySku = new Map(products.map((product) => [product.sku.toLowerCase(), product.id]));
+  const productBySku = new Map(products.map((product) => [product.sku.toLowerCase(), product.id]));
+  const priceById = new Map(products.map((product) => [product.id, product.unitPriceCents]));
   const links = await getDb().supplierPrice.findMany({
-    where: { workspaceId: actor.workspaceId, supplierId },
-    select: { productId: true, supplierSku: true },
+    where: { workspaceId: actor.workspaceId },
+    select: { productId: true, supplierSku: true, manufacturerPartNumber: true },
   });
-  for (const link of links) bySku.set(link.supplierSku.toLowerCase(), link.productId);
-  const touched = new Set<string>();
+  const productByMpn = new Map<string, string>();
+  for (const link of links) {
+    const skuKey = link.supplierSku.toLowerCase();
+    if (!productBySku.has(skuKey)) productBySku.set(skuKey, link.productId);
+    if (link.manufacturerPartNumber) {
+      const partKey = link.manufacturerPartNumber.toLowerCase();
+      if (!productByMpn.has(partKey)) productByMpn.set(partKey, link.productId);
+    }
+  }
+  const matched = new Map<string, SupplierOffer>();
   let unmatched = 0;
-  let pricesHeld = 0;
-  for (const item of items) {
-    const productId = bySku.get(item.sku.toLowerCase());
+  for (const offer of offers) {
+    const productId = matchCatalogueOffer(offer, productBySku, productByMpn);
     if (!productId) {
       unmatched += 1;
       continue;
     }
+    matched.set(productId, offer);
+    const skuKey = offer.supplierSku.toLowerCase();
+    if (!productBySku.has(skuKey)) productBySku.set(skuKey, productId);
+    if (offer.manufacturerPartNumber) {
+      const partKey = offer.manufacturerPartNumber.toLowerCase();
+      if (!productByMpn.has(partKey)) productByMpn.set(partKey, productId);
+    }
+  }
+  const touched = new Set<string>();
+  for (const [productId, offer] of matched) {
+    const costKnown = offer.costCents !== null;
+    const stockKnown = offer.stockQty !== null;
+    const keep = options.preserveMissing === true;
+    const filled = (value: string) => !keep || value.length > 0;
     await getDb().supplierPrice.upsert({
       where: { supplierId_productId: { supplierId, productId } },
       update: {
-        supplierSku: item.sku,
-        stockQty: item.stockQty,
-        ...(item.costCents === null ? {} : { costCents: item.costCents }),
+        supplierSku: offer.supplierSku,
+        ...(offer.manufacturerPartNumber || !keep ? { manufacturerPartNumber: offer.manufacturerPartNumber } : {}),
+        ...(filled(offer.name) ? { offerName: offer.name } : {}),
+        ...(filled(offer.brand) ? { brand: offer.brand } : {}),
+        ...(filled(offer.description) ? { description: offer.description } : {}),
+        ...(filled(offer.specifications) ? { specifications: offer.specifications } : {}),
+        ...(filled(offer.category) ? { category: offer.category } : {}),
+        ...(offer.imageUrls.length > 0 || !keep ? { imageUrls: offer.imageUrls } : {}),
+        ...(offer.leadTimeDays !== null || !keep ? { leadTimeDays: offer.leadTimeDays } : {}),
+        ...(costKnown ? { costCents: offer.costCents ?? 0, costKnown: true } : keep ? {} : { costKnown: false }),
+        ...(stockKnown ? { stockQty: offer.stockQty ?? 0, stockKnown: true } : keep ? {} : { stockKnown: false }),
       },
       create: {
         workspaceId: actor.workspaceId,
         supplierId,
         productId,
-        supplierSku: item.sku,
-        costCents: item.costCents ?? 0,
-        stockQty: item.stockQty,
+        supplierSku: offer.supplierSku,
+        manufacturerPartNumber: offer.manufacturerPartNumber,
+        offerName: offer.name,
+        brand: offer.brand,
+        description: offer.description,
+        specifications: offer.specifications,
+        imageUrls: offer.imageUrls,
+        category: offer.category,
+        leadTimeDays: offer.leadTimeDays,
+        costCents: offer.costCents ?? 0,
+        costKnown,
+        stockQty: offer.stockQty ?? 0,
+        stockKnown,
       },
     });
     touched.add(productId);
   }
+  const now = new Date();
+  let pricesHeld = 0;
+  let priceChangesFlagged = 0;
   for (const productId of touched) {
     const rows = await getDb().supplierPrice.findMany({
       where: { workspaceId: actor.workspaceId, productId },
-      include: { supplier: { select: { markupPercent: true } } },
-    });
-    const available = rows.filter((row) => row.costCents > 0 && row.stockQty > 0);
-    const priced = available.length > 0 ? available : rows.filter((row) => row.costCents > 0);
-    const best = priced.reduce<(typeof priced)[number] | null>((lowest, row) => {
-      if (!lowest || row.costCents < lowest.costCents) return row;
-      return lowest;
-    }, null);
-    const unitPriceCents = best ? markedUpCents(best.costCents, best.supplier.markupPercent) : null;
-    const publishPrice = unitPriceCents !== null && best !== null && priceAllowedByMargin(best.costCents, unitPriceCents, minimumMarginPercent);
-    if (unitPriceCents !== null && !publishPrice) pricesHeld += 1;
-    await getDb().product.update({
-      where: { id: productId },
-      data: {
-        stockOnHand: stockLevel(rows.map((row) => row.stockQty)),
-        ...(publishPrice && unitPriceCents !== null ? { unitPriceCents } : {}),
+      include: {
+        supplier: {
+          select: { markupPercent: true, preference: true, leadTimeDays: true, stockSyncIntervalMinutes: true, priceSyncIntervalMinutes: true },
+        },
       },
     });
+    const data: { stockOnHand?: number; unitPriceCents?: number; pendingUnitPriceCents?: number | null; priceChangeFlagged?: boolean } = {};
+    if (options.applyStock) {
+      const fresh = rows.filter((row) => row.stockKnown && freshFor(row.updatedAt, row.supplier.stockSyncIntervalMinutes, now));
+      if (fresh.length > 0) data.stockOnHand = stockLevel(fresh.map((row) => row.stockQty));
+    }
+    if (options.applyPrice) {
+      const chosen = chooseSupplierOffer(rows.map((row) => ({
+        supplierId: row.supplierId,
+        costCents: row.costCents,
+        costKnown: row.costKnown,
+        stockQty: row.stockQty,
+        stockKnown: row.stockKnown,
+        updatedAt: row.updatedAt,
+        preference: row.supplier.preference,
+        leadTimeDays: row.leadTimeDays ?? row.supplier.leadTimeDays,
+        priceFreshMs: row.supplier.priceSyncIntervalMinutes * 60 * 1000,
+      })), 1, now);
+      const source = chosen ? rows.find((row) => row.supplierId === chosen.supplierId) : null;
+      const sell = chosen?.costCents != null && source ? markedUpCents(chosen.costCents, source.supplier.markupPercent) : null;
+      if (chosen && sell === null) {
+        pricesHeld += 1;
+      } else if (chosen && chosen.costCents != null && sell !== null && !priceAllowedByMargin(chosen.costCents, sell, minimumMarginPercent)) {
+        pricesHeld += 1;
+      } else if (chosen && sell !== null && priceChangeNeedsApproval(priceById.get(productId) ?? 0, sell)) {
+        priceChangesFlagged += 1;
+        data.pendingUnitPriceCents = sell;
+        data.priceChangeFlagged = true;
+      } else if (sell !== null) {
+        data.unitPriceCents = sell;
+        data.pendingUnitPriceCents = null;
+        data.priceChangeFlagged = false;
+      }
+    }
+    if (Object.keys(data).length > 0) {
+      await getDb().product.update({ where: { id: productId }, data });
+    }
   }
-  if (touched.size > 0) {
+  if (!options.preserveMissing && touched.size > 0) {
     await recordActivity(getDb(), {
       workspaceId: actor.workspaceId,
       actorId: actor.userId === "system" ? null : actor.userId,
@@ -446,16 +634,45 @@ async function applyFeed(actor: Actor, supplierId: string, items: { sku: string;
       summary: `Updated stock for ${touched.size} products.`,
     });
   }
-  return { updated: touched.size, unmatched, pricesHeld };
+  return { updated: touched.size, unmatched, pricesHeld, priceChangesFlagged, skipped: false };
 }
 
-async function readFeed(url: string, encryptedKey: string | null) {
-  const headers = new Headers({ accept: "application/json" });
-  if (encryptedKey) headers.set("authorization", `Bearer ${decryptSecret(encryptedKey)}`);
-  const response = await fetch(publicUrl(url), { headers, redirect: "manual", signal: AbortSignal.timeout(20000) });
+async function readFeed(supplier: {
+  stockFeedUrl: string | null;
+  feedType: "JSON" | "XML" | "CSV_URL" | "MANUAL_CSV";
+  authType: "NONE" | "BEARER" | "API_KEY_HEADER" | "BASIC";
+  authHeaderName: string;
+  authUsername: string;
+  stockFeedKeyEncrypted: string | null;
+  fieldMapping: unknown;
+  vatMode: "INCLUSIVE" | "EXCLUSIVE";
+}) {
+  if (!supplier.stockFeedUrl) throw new AppError("Add the supplier feed address first.");
+  const headers = new Headers({
+    accept: supplier.feedType === "XML" ? "application/xml, text/xml" : supplier.feedType === "CSV_URL" ? "text/csv, text/plain" : "application/json",
+  });
+  const creds = unpackCreds(supplier.stockFeedKeyEncrypted ? openKey(supplier.stockFeedKeyEncrypted) : null);
+  if (supplier.authType === "BEARER" && creds.token) headers.set("authorization", `Bearer ${creds.token}`);
+  if (supplier.authType === "API_KEY_HEADER" && creds.token) headers.set(supplier.authHeaderName || "X-Api-Key", creds.token);
+  if (supplier.authType === "BASIC" && (creds.username || creds.password)) {
+    headers.set("authorization", `Basic ${Buffer.from(`${creds.username}:${creds.password}`).toString("base64")}`);
+  }
+  const response = await fetch(publicUrl(supplier.stockFeedUrl), { headers, redirect: "manual", signal: AbortSignal.timeout(20000) });
   if (response.status >= 300 && response.status < 400) throw new AppError("The supplier feed must not redirect.");
   if (!response.ok) throw new AppError(`The supplier feed returned ${response.status}.`);
-  return parseSupplierStockBody(await response.json());
+  const text = await response.text();
+  if (text.length > 5_000_000) throw new AppError("The supplier feed is too large.");
+  const mapping = readFieldMapping(supplier.fieldMapping);
+  const parsed = supplier.feedType === "XML"
+    ? parseXmlOffers(text, mapping)
+    : supplier.feedType === "CSV_URL"
+      ? parseCsvOffers(text, mapping)
+      : parseJsonText(text, mapping);
+  if (parsed.error) return parsed;
+  return {
+    ...parsed,
+    offers: parsed.offers.map((offer) => ({ ...offer, costCents: exclusiveCostCents(offer.costCents, supplier.vatMode) })),
+  };
 }
 
 async function ownedSupplier(workspaceId: string, supplierId: string) {
@@ -477,5 +694,75 @@ function sealKey(value: string) {
     return encryptSecret(value);
   } catch {
     throw new AppError("Set OAUTH_ENCRYPTION_KEY before saving an API key.");
+  }
+}
+
+function openKey(value: string) {
+  try {
+    return decryptSecret(value);
+  } catch {
+    throw new AppError("The saved supplier credential could not be read.");
+  }
+}
+
+function unpackCreds(raw: string | null) {
+  if (!raw) return { token: "", username: "", password: "" };
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (parsed && typeof parsed === "object" && ("token" in parsed || "password" in parsed || "username" in parsed)) {
+      return {
+        token: typeof parsed.token === "string" ? parsed.token : "",
+        username: typeof parsed.username === "string" ? parsed.username : "",
+        password: typeof parsed.password === "string" ? parsed.password : "",
+      };
+    }
+  } catch {
+    return { token: raw, username: "", password: "" };
+  }
+  return { token: raw, username: "", password: "" };
+}
+
+function mappingFromInput(input: FeedSettings): SupplierFieldMapping {
+  const mapping: SupplierFieldMapping = {};
+  const assign = (key: keyof SupplierFieldMapping, value: string) => {
+    if (value.trim()) mapping[key] = value.trim();
+  };
+  assign("productElement", input.productElement);
+  assign("sku", input.mapSku);
+  assign("manufacturerPartNumber", input.mapMpn);
+  assign("name", input.mapName);
+  assign("brand", input.mapBrand);
+  assign("cost", input.mapCost);
+  assign("stock", input.mapStock);
+  assign("description", input.mapDescription);
+  assign("specifications", input.mapSpecifications);
+  assign("imageUrls", input.mapImages);
+  assign("category", input.mapCategory);
+  assign("leadTimeDays", input.mapLeadTime);
+  return mapping;
+}
+
+function readLeadTime(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const days = Number(trimmed);
+  if (!Number.isInteger(days) || days < 0 || days > 365) throw new AppError("Enter a lead time from 0 to 365 days, or leave it blank.");
+  return days;
+}
+
+function due(last: Date | null, minutes: number, now: Date) {
+  if (!last) return true;
+  return now.getTime() - last.getTime() >= minutes * 60 * 1000;
+}
+
+function freshFor(updatedAt: Date, minutes: number, now: Date) {
+  return now.getTime() - updatedAt.getTime() <= minutes * 60 * 1000;
+}
+
+function parseJsonText(text: string, mapping: SupplierFieldMapping) {
+  try {
+    return parseJsonOffers(JSON.parse(text) as unknown, mapping);
+  } catch {
+    return { offers: [], skipped: 0, error: "The feed is not valid JSON." };
   }
 }

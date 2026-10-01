@@ -118,7 +118,7 @@ export function QuotePanel({
                 {products.map((product) => <option key={product.id} value={product.id}>{product.sku} — {product.name} ({product.stockLeft} left)</option>)}
               </select>
             </Field>
-            {selected?.costCents != null ? <p className="text-sm text-muted md:col-span-2">Lowest supplier cost {formatCents(selected.costCents, currency)}. The unit price stays the catalogue sell price until you change it.</p> : null}
+            {selected?.costCents != null ? <p className="text-sm text-muted md:col-span-2">Selected supplier cost {formatCents(selected.costCents, currency)}. The unit price stays the catalogue sell price until you change it.</p> : null}
             <Field label="Description" name="description" error={state.fieldErrors?.description}>
               <input id="description" name="description" value={description} onChange={(event) => setDescription(event.target.value)} required className={inputClass} />
             </Field>

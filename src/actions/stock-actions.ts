@@ -28,8 +28,10 @@ export async function syncSupplierFeedAction(supplierId: string): Promise<Action
     const result = await syncSupplierFeed(actor(session), supplierId);
     revalidatePath(`/suppliers/${supplierId}`);
     revalidatePath("/products");
-    const held = result.pricesHeld > 0 ? ` ${result.pricesHeld} prices stayed unchanged because they were below the minimum margin.` : "";
-    return { success: `Updated ${result.updated} products. ${result.unmatched} supplier SKUs are not in the catalogue.${held}` };
+    const held = result.pricesHeld > 0 ? ` ${result.pricesHeld} prices stayed unchanged because the cost was missing or below the minimum margin.` : "";
+    const flagged = result.priceChangesFlagged > 0 ? ` ${result.priceChangesFlagged} large price changes are waiting for approval on the product.` : "";
+    if (result.skipped) return { success: "This feed was synced recently. The next automatic sync will run when its interval is due." };
+    return { success: `Updated ${result.updated} products. ${result.unmatched} supplier rows are not in the catalogue.${held}${flagged}` };
   });
 }
 

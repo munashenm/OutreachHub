@@ -6,7 +6,7 @@ import type { ActionState } from "@/lib/format";
 import { runAction } from "@/lib/run-action";
 import { fieldErrors, productSchema, readForm } from "@/lib/validators";
 import { requireSession } from "@/services/auth-service";
-import { createProduct, updateProduct } from "@/services/product-service";
+import { createProduct, updateProduct, applyPendingPrice } from "@/services/product-service";
 
 function actor(session: Awaited<ReturnType<typeof requireSession>>) {
   return { userId: session.user.id, workspaceId: session.workspace.id };
@@ -32,5 +32,15 @@ export async function updateProductAction(_prev: ActionState, formData: FormData
     await updateProduct(actor(session), id, parsed.data);
     revalidatePath("/products");
     return { success: "Product saved." };
+  });
+}
+
+export async function applyPendingPriceAction(productId: string): Promise<ActionState> {
+  return runAction(async () => {
+    const session = await requireSession();
+    await applyPendingPrice(actor(session), productId);
+    revalidatePath("/products");
+    revalidatePath(`/products/${productId}/edit`);
+    return { success: "The supplier price is now the catalogue sell price." };
   });
 }

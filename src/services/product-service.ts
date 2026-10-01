@@ -74,6 +74,7 @@ export async function updateProduct(actor: Actor, id: string, input: ProductInpu
         specifications: input.specifications,
         imageUrls: images(input),
         unitPriceCents: price(input),
+        ...(price(input) !== current.unitPriceCents ? { pendingUnitPriceCents: null, priceChangeFlagged: false } : {}),
         active: input.active === "true",
       },
     });
@@ -81,6 +82,22 @@ export async function updateProduct(actor: Actor, id: string, input: ProductInpu
     if (isUniqueViolation(error)) throw new AppError("A product with this SKU already exists in this workspace.");
     throw error;
   }
+}
+
+export async function applyPendingPrice(actor: Actor, id: string) {
+  const current = await getProduct(actor.workspaceId, id);
+  if (!current) throw new AppError("Product not found.", 404, "NOT_FOUND");
+  if (!current.priceChangeFlagged || current.pendingUnitPriceCents == null) {
+    throw new AppError("This product has no supplier price waiting for approval.");
+  }
+  return getDb().product.update({
+    where: { id: current.id },
+    data: {
+      unitPriceCents: current.pendingUnitPriceCents,
+      pendingUnitPriceCents: null,
+      priceChangeFlagged: false,
+    },
+  });
 }
 
 export function centsToInput(cents: number) {
