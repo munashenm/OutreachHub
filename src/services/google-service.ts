@@ -159,6 +159,7 @@ export type OutboundMail = {
   listUnsubscribe?: string;
   threadId?: string | null;
   inReplyTo?: string | null;
+  attachments?: { filename: string; contentType: string; data: Buffer }[];
 };
 
 export async function sendGmailMessage(accessToken: string, input: OutboundMail) {

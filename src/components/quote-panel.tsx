@@ -12,6 +12,7 @@ type ProductOption = { id: string; sku: string; name: string; unitPrice: string;
 
 export function QuotePanel({
   rfqId,
+  quoteId,
   lines,
   currency,
   sent,
@@ -21,6 +22,7 @@ export function QuotePanel({
   companyName,
 }: {
   rfqId: string;
+  quoteId: string | null;
   lines: Line[];
   currency: string;
   sent: boolean;
@@ -37,6 +39,9 @@ export function QuotePanel({
   const [sendMessage, setSendMessage] = useState<string>();
   const [validDays, setValidDays] = useState("14");
   const [notes, setNotes] = useState("");
+  const [documentMode, setDocumentMode] = useState("STANDARD");
+  const [exportQuote, setExportQuote] = useState(false);
+  const [references, setReferences] = useState("");
   const selected = products.find((item) => item.id === productId);
   const leftByProduct = new Map(products.map((product) => [product.id, product.stockLeft]));
   const shortProductIds = new Set(linesExceedingStock(
@@ -45,6 +50,7 @@ export function QuotePanel({
   ));
   const shortNames = products.filter((product) => shortProductIds.has(product.id)).map((product) => product.sku);
   const total = quoteTotalCents(lines.map((line) => ({ quantity: Number(line.quantity), unitPriceCents: line.unitPriceCents })));
+  const pdfQuery = `mode=${documentMode}&export=${exportQuote ? "1" : "0"}`;
   const preview = lines.length === 0 ? "" : formatQuoteEmail({
     subject,
     currency,
@@ -152,8 +158,30 @@ export function QuotePanel({
             <Field label="Terms on the quotation" name="notes">
               <textarea id="notes" name="notes" className={textAreaClass} value={notes} onChange={(event) => setNotes(event.target.value)} />
             </Field>
-            <button className={buttonPrimary} disabled={sending || lines.length === 0}>{sending ? "Sending..." : "Send quotation"}</button>
+            <Field label="Quotation mode" name="documentMode">
+              <select id="documentMode" name="documentMode" className={inputClass} value={documentMode} onChange={(event) => setDocumentMode(event.target.value)}>
+                <option value="STANDARD">Standard</option>
+                <option value="FORMAL">Formal / tender</option>
+              </select>
+            </Field>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="exportQuote" value="true" checked={exportQuote} onChange={(event) => setExportQuote(event.target.checked)} />
+              Export quotation
+            </label>
+            {documentMode === "FORMAL" ? (
+              <Field label="Manufacturer or datasheet references" name="references">
+                <textarea id="references" name="references" className={textAreaClass} value={references} onChange={(event) => setReferences(event.target.value)} placeholder="https://" />
+              </Field>
+            ) : <input type="hidden" name="references" value="" />}
+            <button className={buttonPrimary} disabled={sending || lines.length === 0}>{sending ? "Sending..." : "Send Quote"}</button>
           </form>
+          {quoteId && lines.length > 0 ? (
+            <p className="flex flex-wrap gap-3 text-sm">
+              <a className="text-accent" href={`/api/quotes/${quoteId}/pdf?${pdfQuery}`} target="_blank" rel="noreferrer">Preview PDF</a>
+              <a className="text-accent" href={`/api/quotes/${quoteId}/pdf?${pdfQuery}&download=1`}>Download PDF</a>
+              <a className="text-accent" href={`/api/quotes/${quoteId}/pdf?${pdfQuery}&download=1`} target="_blank" rel="noreferrer">Regenerate Draft PDF</a>
+            </p>
+          ) : null}
           {sendMessage ? <p className="text-sm text-muted">{sendMessage}</p> : null}
           {preview ? <pre className="whitespace-pre-wrap rounded-lg bg-canvas p-4 text-sm">{preview}</pre> : null}
         </>

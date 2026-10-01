@@ -36,7 +36,13 @@ export async function sendQuoteAction(_prev: ActionState, formData: FormData): P
     const session = await requireSession();
     const parsed = quoteSendSchema.safeParse(readForm(formData));
     if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Check the quotation details." };
-    await sendQuote(actor(session), parsed.data.rfqId, { validDays: parsed.data.validDays, notes: parsed.data.notes });
+    await sendQuote(actor(session), parsed.data.rfqId, {
+      validDays: parsed.data.validDays,
+      notes: parsed.data.notes,
+      documentMode: parsed.data.documentMode,
+      exportQuote: parsed.data.exportQuote === "true",
+      references: parsed.data.references,
+    });
     revalidatePath(`/rfqs/${parsed.data.rfqId}`);
     revalidatePath("/inbox");
     revalidatePath("/dashboard");

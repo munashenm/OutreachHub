@@ -28,7 +28,7 @@ export async function getThread(workspaceId: string, messageId: string) {
   return { message, messages };
 }
 
-export async function sendThreadReply(actor: Actor, input: { messageId: string; to: string; cc: string; subject: string; body: string }) {
+export async function sendThreadReply(actor: Actor, input: { messageId: string; to: string; cc: string; subject: string; body: string; attachments?: { filename: string; contentType: string; data: Buffer }[] }) {
   const original = ownedByWorkspace(
     await getDb().message.findFirst({ where: { id: input.messageId, workspaceId: actor.workspaceId } }),
     actor.workspaceId,
@@ -54,6 +54,7 @@ export async function sendThreadReply(actor: Actor, input: { messageId: string; 
     body: input.body,
     threadId: target.threadId,
     inReplyTo: target.inReplyTo,
+    attachments: input.attachments,
   });
   const saved = await getDb().$transaction(async (tx) => {
     const message = await tx.message.create({

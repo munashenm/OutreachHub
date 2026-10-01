@@ -1,10 +1,12 @@
 import { Prisma } from "../generated/prisma/client";
 import { getDb } from "../lib/db";
 import { AppError } from "../lib/errors";
-import { formatQuoteEmail, formatQuoteNumber, parseMoneyToCents, parseQuantity, quoteValidUntil, snapshotQuoteLine } from "../lib/quote";
+import { parseMoneyToCents, parseQuantity, quoteValidUntil, snapshotQuoteLine } from "../lib/quote";
+import { quoteCoverEmail, urbanFocusQuoteNumber } from "../lib/quotation-document";
 import { ownedByWorkspace } from "../lib/gmail-sync";
 import { recordActivity } from "./activity-service";
 import { getRfq } from "./rfq-service";
+import { generateQuotePdf } from "./quotation-pdf-service";
 import { sendThreadReply } from "./reply-service";
 import { queueStockForWebsite } from "./stock-sync-service";
 import type { Actor } from "./types";
@@ -12,6 +14,7 @@ import type { Actor } from "./types";
 export async function quotesForRfq(workspaceId: string, rfqId: string) {
   return getDb().quote.findMany({
     where: { workspaceId, rfqId },
+    omit: { pdf: true },
     include: { lines: { orderBy: { id: "asc" }, include: { product: { select: { sku: true, name: true, specifications: true, imageUrls: true } } } } },
     orderBy: { createdAt: "desc" },
   });
@@ -72,6 +75,7 @@ export async function removeQuoteLine(actor: Actor, lineId: string) {
 export async function getQuoteDocument(workspaceId: string, id: string) {
   return getDb().quote.findFirst({
     where: { id, workspaceId, number: { not: null } },
+    omit: { pdf: true },
     include: {
       lines: { orderBy: { id: "asc" }, include: { product: { select: { specifications: true, imageUrls: true } } } },
       rfq: { include: { prospect: true, company: true, sourceMessage: true } },
@@ -79,7 +83,7 @@ export async function getQuoteDocument(workspaceId: string, id: string) {
   });
 }
 
-export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays: number; notes: string }) {
+export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays: number; notes: string; documentMode?: "STANDARD" | "FORMAL"; exportQuote?: boolean; references?: string }) {
   const rfq = await getRfq(actor.workspaceId, rfqId);
   if (!rfq) throw new AppError("RFQ not found.", 404, "NOT_FOUND");
   const quote = await getDb().quote.findFirst({
@@ -108,19 +112,28 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
         validDays: terms.validDays,
         notes: terms.notes,
         validUntil: quoteValidUntil(issuedAt, terms.validDays),
+        documentMode: terms.documentMode === "FORMAL" ? "FORMAL" : "STANDARD",
+        exportQuote: terms.exportQuote === true,
+        references: terms.references ?? "",
       },
-      include: { lines: { include: { product: { select: { specifications: true, imageUrls: true } } } } },
+      include: { lines: { include: { product: { select: { specifications: true, imageUrls: true, sku: true, name: true, manufacturerPartNumber: true } } } } },
     });
     const lines = [];
-    for (const line of updated.lines) {
+    for (const [index, line] of updated.lines.entries()) {
       const shot = snapshotQuoteLine(line.product);
       const specifications = line.specifications.trim() ? line.specifications : shot.specifications;
       const imageUrls = line.imageUrls.length > 0 ? line.imageUrls : shot.imageUrls;
-      await tx.quoteLine.update({
-        where: { id: line.id },
-        data: { specifications, imageUrls },
-      });
-      lines.push({ ...line, specifications, imageUrls });
+      const requirement = rfq.lines[index];
+      const frozen = {
+        specifications,
+        imageUrls,
+        sku: line.sku || line.product?.sku || "",
+        modelName: line.modelName || line.product?.name || "",
+        manufacturerPartNumber: line.manufacturerPartNumber || line.product?.manufacturerPartNumber || "",
+        requirementText: line.requirementText || requirement?.specifications || requirement?.description || "",
+      };
+      await tx.quoteLine.update({ where: { id: line.id }, data: frozen });
+      lines.push({ ...line, ...frozen });
     }
     return { ...updated, lines };
   });
@@ -129,22 +142,16 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
   }
   const quoteNumber = prepared.number;
   const quoteIssuedAt = prepared.issuedAt;
-  const body = formatQuoteEmail({
-    subject: rfq.subject,
-    currency: prepared.currency,
-    number: quoteNumber,
-    issuedAt: quoteIssuedAt,
+  const pdf = await generateQuotePdf(actor.workspaceId, prepared.id, {
+    mode: terms.documentMode === "FORMAL" ? "FORMAL" : "STANDARD",
+    exportQuote: terms.exportQuote === true,
+    references: terms.references ?? "",
+  });
+  const customerName = rfq.prospect ? `${rfq.prospect.firstName} ${rfq.prospect.lastName}`.trim() : rfq.sourceMessage.fromName ?? "";
+  const body = quoteCoverEmail({
+    customerName,
+    quoteNumber: urbanFocusQuoteNumber(quoteNumber, quoteIssuedAt),
     validUntil: prepared.validUntil,
-    customerName: rfq.prospect ? `${rfq.prospect.firstName} ${rfq.prospect.lastName}`.trim() : "",
-    companyName: rfq.company?.companyName ?? "",
-    notes: prepared.notes,
-    lines: prepared.lines.map((line) => ({
-      description: line.description,
-      quantity: Number(line.quantity),
-      unitPriceCents: line.unitPriceCents,
-      specifications: line.specifications,
-      imageUrls: line.imageUrls,
-    })),
   });
   await sendThreadReply(actor, {
     messageId: rfq.sourceMessageId,
@@ -152,6 +159,7 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
     cc: "",
     subject: rfq.subject.toLowerCase().startsWith("re:") ? rfq.subject : `Re: ${rfq.subject}`,
     body,
+    attachments: [{ filename: pdf.filename, contentType: "application/pdf", data: pdf.bytes }],
   });
   await getDb().$transaction(async (tx) => {
     await tx.quote.update({ where: { id: prepared.id }, data: { status: "SENT", sentAt: new Date() } });
@@ -162,7 +170,7 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
       prospectId: rfq.prospectId,
       companyId: rfq.companyId,
       type: "QUOTE_SENT",
-      summary: `Sent quotation ${formatQuoteNumber(quoteNumber, quoteIssuedAt)} for “${rfq.subject}”.`,
+      summary: `Sent quotation ${urbanFocusQuoteNumber(quoteNumber, quoteIssuedAt)} for “${rfq.subject}”.`,
     });
     await queueStockForWebsite(tx, actor.workspaceId, prepared.lines.map((line) => line.productId ?? ""));
   });

@@ -25,6 +25,7 @@ import { extractQuotationFields } from "./ai-service";
 import { sendQuote } from "./quote-service";
 import { sendThreadReply } from "./reply-service";
 import { extractProductRequirements, planSourcing, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
+import { sourceExternalForRequirements } from "./external-sourcing-service";
 
 const BATCH = 15;
 
@@ -217,13 +218,21 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   });
   if (!rfq || rfq.quotes.some((quote) => quote.status === "SENT")) return;
   const requirements = extractProductRequirements(`${rfq.sourceMessage?.subject ?? rfq.subject}\n${rfq.sourceMessage?.body || rfq.description}`);
-  const plan = planSourcing({
-    requirements,
-    pools: await sourcingPools(workspace.id),
+  const margins = {
     minimumMarginPercent: workspace.minimumMarginPercent,
     autoQuoteMarginPercent: workspace.autoQuoteMarginPercent,
     autoSendMarginPercent: workspace.autoSendMarginPercent,
-  });
+  };
+  let pools = await sourcingPools(workspace.id);
+  let plan = planSourcing({ requirements, pools, ...margins });
+  if (plan.kind === "SOURCING") {
+    const live = await sourceExternalForRequirements(workspace.id, requirements);
+    if (live.candidates.length > 0) {
+      pools = { ...pools, external: [...pools.external, ...live.candidates] };
+      plan = planSourcing({ requirements, pools, ...margins });
+    }
+    if (plan.kind === "SOURCING") plan = { ...plan, note: live.note };
+  }
   if (plan.kind === "CLARIFICATION") {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: plan.message } });
     await sendSourcingReply(rfq, plan.message);
@@ -287,9 +296,13 @@ async function sourcingPools(workspaceId: string): Promise<SourcingPools> {
   const db = getDb();
   const now = Date.now();
   const freshAfter = new Date(now - 24 * 60 * 60 * 1000);
-  const [products, offers, external] = await Promise.all([
+  const [products, offers, feedItems, external] = await Promise.all([
     db.product.findMany({ where: { workspaceId, active: true }, select: { id: true, sku: true, name: true, brand: true, manufacturerPartNumber: true, specifications: true, stockOnHand: true } }),
     db.supplierPrice.findMany({ where: { workspaceId }, include: { supplier: { select: { name: true, markupPercent: true, authType: true, priceSyncIntervalMinutes: true } } } }),
+    db.supplierFeedItem.findMany({
+      where: { workspaceId },
+      include: { supplier: { select: { name: true, markupPercent: true, authType: true, priceSyncIntervalMinutes: true, leadTimeDays: true } } },
+    }),
     db.externalSourceOffer.findMany({ where: { workspaceId, checkedAt: { gte: freshAfter }, sourceUrl: { not: "" } } }),
   ]);
   const bestOffer = new Map<string, (typeof offers)[number]>();
@@ -356,6 +369,39 @@ async function sourcingPools(workspaceId: string): Promise<SourcingPools> {
       stockKnown: offer.stockKnown,
       fresh,
       checkedAt: offer.updatedAt.toISOString(),
+      reputable: true,
+    };
+    if (row.sourceKind === "SUPPLIER_API") supplierApis.push(row);
+    else supplierFeeds.push(row);
+  }
+  const linked = new Set(offers.map((offer) => `${offer.supplierId}:${offer.productId}`));
+  for (const item of feedItems) {
+    if (item.productId && linked.has(`${item.supplierId}:${item.productId}`)) continue;
+    const fresh = now - item.updatedAt.getTime() <= item.supplier.priceSyncIntervalMinutes * 60 * 1000;
+    const row: SourcingCandidate = {
+      sourceKind: item.supplier.authType === "NONE" ? "SUPPLIER_FEED" : "SUPPLIER_API",
+      sourceName: item.supplier.name,
+      sourceUrl: "",
+      sourceType: "DISTRIBUTOR",
+      productId: item.productId,
+      name: item.name || item.supplierSku,
+      brand: item.brand,
+      model: item.manufacturerPartNumber,
+      sku: item.supplierSku,
+      mpn: item.manufacturerPartNumber,
+      specifications: item.specifications || item.description || item.name,
+      costExVatCents: item.costKnown ? item.costCents : null,
+      listedPriceCents: null,
+      vatIncluded: false,
+      shippingCents: 0,
+      procurementCents: 0,
+      importCents: 0,
+      riskPercent: 0,
+      markupPercent: item.supplier.markupPercent,
+      stockQty: item.stockKnown ? item.stockQty : null,
+      stockKnown: item.stockKnown,
+      fresh,
+      checkedAt: item.updatedAt.toISOString(),
       reputable: true,
     };
     if (row.sourceKind === "SUPPLIER_API") supplierApis.push(row);

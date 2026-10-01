@@ -1,9 +1,11 @@
 import Link from "next/link";
+import { QuoteSettingsForm } from "@/components/quote-settings-form";
 import { StoreConnectionForm } from "@/components/store-connection-form";
 import { CreateWorkspaceForm, RenameWorkspaceForm } from "@/components/settings-forms";
 import { PageHeader, Panel } from "@/components/ui";
 import { firstParam, formatDateTime } from "@/lib/format";
 import { requireSession } from "@/services/auth-service";
+import { quoteSettingsForForm } from "@/services/quotation-pdf-service";
 import { getStoreConnection } from "@/services/stock-sync-service";
 
 export default async function SettingsPage({
@@ -13,7 +15,10 @@ export default async function SettingsPage({
 }) {
   const session = await requireSession();
   const status = firstParam((await searchParams).status);
-  const store = await getStoreConnection(session.workspace.id);
+  const [store, quoteSettings] = await Promise.all([
+    getStoreConnection(session.workspace.id),
+    quoteSettingsForForm(session.workspace.id),
+  ]);
   return (
     <div className="space-y-4">
       <PageHeader title="Settings" description="Workspace identity, suppression, and the audit trail." />
@@ -40,6 +45,11 @@ export default async function SettingsPage({
         <div className="mt-4">
           <CreateWorkspaceForm />
         </div>
+      </Panel>
+      <Panel className="p-5">
+        <h2 className="font-semibold">Quotation</h2>
+        <p className="mt-1 mb-4 text-sm text-muted">These details appear on the PDF quotation. Banking details stay off every other screen. VAT registration is printed only when it is saved and enabled. The export note is used only on an export quotation.</p>
+        <QuoteSettingsForm settings={quoteSettings} canManage={session.role === "OWNER" || session.role === "ADMIN"} />
       </Panel>
       <Panel className="p-5">
         <h2 className="font-semibold">Store integration</h2>

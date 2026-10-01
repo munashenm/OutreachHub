@@ -253,6 +253,37 @@ export const quoteSendSchema = z.object({
   rfqId: z.string().trim().min(1),
   validDays: z.coerce.number().int().min(1).max(90),
   notes: z.string().trim().max(2000).optional().default(""),
+  documentMode: z.enum(["STANDARD", "FORMAL"]).optional().default("STANDARD"),
+  exportQuote: z.enum(["true", "false"]).optional().default("false"),
+  references: z.string().trim().max(4000).optional().default(""),
+});
+
+const term = z.string().trim().max(800);
+
+export const quoteSettingsSchema = z.object({
+  legalName: z.string().trim().min(1).max(120),
+  address: z.string().trim().max(500),
+  phone: z.string().trim().max(40),
+  email: z.string().trim().max(200),
+  website: z.string().trim().max(200),
+  vatNumber: z.string().trim().max(40).optional().default(""),
+  showVatNumber: z.enum(["true", "false"]).optional().default("false"),
+  showBanking: z.enum(["true", "false"]).optional().default("false"),
+  bankName: z.string().trim().max(120).optional().default(""),
+  accountName: z.string().trim().max(120).optional().default(""),
+  accountNumber: z.string().trim().max(40).optional().default(""),
+  branchCode: z.string().trim().max(20).optional().default(""),
+  accountType: z.string().trim().max(40).optional().default(""),
+  availability: term,
+  leadTime: term,
+  paymentTerms: term,
+  validity: term,
+  delivery: term,
+  newGenuine: term,
+  substitution: term,
+  taxes: term,
+  warranty: term,
+  exportNote: term,
 });
 
 export const quoteLineSchema = z.object({

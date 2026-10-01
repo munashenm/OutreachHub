@@ -10,7 +10,7 @@ export default async function SuppliersPage() {
     <div>
       <PageHeader
         title="Suppliers"
-        description="Add a supplier, then connect a JSON, XML, or CSV feed, or upload a CSV. Unknown products are skipped."
+        description="Add each supplier, then connect that supplier's JSON, XML, or CSV feed, or upload a CSV. Every saved feed is searched when a quotation is prepared."
         actions={<Link className={buttonPrimary} href="/suppliers/new">New supplier</Link>}
       />
       <Panel>

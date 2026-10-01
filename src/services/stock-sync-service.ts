@@ -17,6 +17,7 @@ import {
   type SupplierFieldMapping,
   type SupplierOffer,
 } from "../lib/supplier-connector";
+import { frontosaFeedUrls, frontosaTokenFromUrl, isFrontosaFeed, joinFrontosaFeeds, redactSecrets } from "../lib/frontosa";
 import { decryptSecret, encryptSecret } from "../lib/token-crypto";
 import { recordActivity } from "./activity-service";
 import { baselineIdentities } from "./catalogue-service";
@@ -127,12 +128,12 @@ export async function syncSupplierFeed(actor: Actor, supplierId: string, options
     });
     return result;
   } catch (error) {
-    const message = error instanceof AppError ? error.message : "The supplier feed could not be read.";
+    const message = redactSecrets(error instanceof AppError ? error.message : "The supplier feed could not be read.");
     await getDb().supplier.update({
       where: { id: supplier.id },
       data: { lastStockSyncError: message.slice(0, 300) },
     });
-    throw error instanceof AppError ? error : new AppError(message);
+    throw new AppError(message.slice(0, 300));
   }
 }
 
@@ -670,6 +671,7 @@ async function applyFeed(
       await getDb().product.update({ where: { id: productId }, data });
     }
   }
+  await rememberFeedItems(actor.workspaceId, supplierId, offers, matched);
   const created = await linkNewSupplierOffers(actor, supplierId, unmatchedOffers, minimumMarginPercent);
   if (!options.preserveMissing && touched.size > 0) {
     await recordActivity(getDb(), {
@@ -680,6 +682,36 @@ async function applyFeed(
     });
   }
   return { updated: touched.size + created, unmatched, pricesHeld, priceChangesFlagged, skipped: false };
+}
+
+async function rememberFeedItems(workspaceId: string, supplierId: string, offers: SupplierOffer[], matched: Map<string, SupplierOffer>) {
+  const productIdBySku = new Map<string, string>();
+  for (const [productId, offer] of matched) productIdBySku.set(offer.supplierSku.toLowerCase(), productId);
+  for (const offer of offers) {
+    const supplierSku = offer.supplierSku.trim();
+    if (!supplierSku) continue;
+    const productId = productIdBySku.get(supplierSku.toLowerCase()) ?? null;
+    const data = {
+      manufacturerPartNumber: offer.manufacturerPartNumber,
+      name: offer.name,
+      brand: offer.brand,
+      description: offer.description,
+      specifications: offer.specifications,
+      category: offer.category,
+      imageUrls: offer.imageUrls,
+      leadTimeDays: offer.leadTimeDays,
+      costCents: offer.costCents ?? 0,
+      costKnown: offer.costCents != null,
+      stockQty: offer.stockQty ?? 0,
+      stockKnown: offer.stockQty != null,
+      productId,
+    };
+    await getDb().supplierFeedItem.upsert({
+      where: { supplierId_supplierSku: { supplierId, supplierSku } },
+      update: data,
+      create: { workspaceId, supplierId, supplierSku, ...data },
+    });
+  }
 }
 
 async function linkNewSupplierOffers(actor: Actor, supplierId: string, offers: SupplierOffer[], minimumMarginPercent: number) {
@@ -890,6 +922,34 @@ async function createStaffProduct(actor: Actor, input: {
   }
 }
 
+async function readFrontosa(supplier: {
+  stockFeedUrl: string | null;
+  stockFeedKeyEncrypted: string | null;
+}) {
+  const creds = unpackCreds(supplier.stockFeedKeyEncrypted ? openKey(supplier.stockFeedKeyEncrypted) : null);
+  const token = creds.token || frontosaTokenFromUrl(supplier.stockFeedUrl ?? "");
+  if (!token) return { offers: [], skipped: 0, error: "The Frontosa feed needs a token in the key field." };
+  const urls = frontosaFeedUrls(token);
+  try {
+    const catalogue = await fetchFrontosa(urls.catalogue);
+    const stock = await fetchFrontosa(urls.stock);
+    const joined = joinFrontosaFeeds(catalogue, stock);
+    return { offers: joined.offers, skipped: joined.skipped, error: joined.error ? redactSecrets(joined.error, token) : null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The Frontosa feed could not be read.";
+    return { offers: [], skipped: 0, error: redactSecrets(message, token).slice(0, 300) };
+  }
+}
+
+async function fetchFrontosa(url: string) {
+  const response = await fetch(url, { headers: { accept: "application/json" }, redirect: "manual", signal: AbortSignal.timeout(20000) });
+  if (response.status >= 300 && response.status < 400) throw new Error("The Frontosa feed must not redirect.");
+  if (!response.ok) throw new Error(`The Frontosa feed returned ${response.status}.`);
+  const text = await response.text();
+  if (text.length > 5_000_000) throw new Error("The Frontosa feed is too large.");
+  return text;
+}
+
 async function readFeed(supplier: {
   stockFeedUrl: string | null;
   feedType: "JSON" | "XML" | "CSV_URL" | "MANUAL_CSV";
@@ -901,6 +961,7 @@ async function readFeed(supplier: {
   vatMode: "INCLUSIVE" | "EXCLUSIVE";
 }) {
   if (!supplier.stockFeedUrl) throw new AppError("Add the supplier feed address first.");
+  if (isFrontosaFeed(supplier.stockFeedUrl)) return readFrontosa(supplier);
   const headers = new Headers({
     accept: supplier.feedType === "XML" ? "application/xml, text/xml" : supplier.feedType === "CSV_URL" ? "text/csv, text/plain" : "application/json",
   });

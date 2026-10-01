@@ -164,6 +164,7 @@ model Workspace {
   autoSendMarginPercent  Int       @default(25)
   storeLastSyncAt        DateTime?
   storeLastError         String?
+  quoteSettings          Json?
   createdAt           DateTime  @default(now())
   updatedAt DateTime @updatedAt
 
@@ -539,6 +540,7 @@ model Product {
   storeOrderLines StoreOrderLine[]
   catalogueItems StoreCatalogueItem[]
   rfqLines       RfqLine[]
+  feedItems      SupplierFeedItem[]
 
   @@unique([workspaceId, sku])
   @@index([workspaceId, active])
@@ -555,6 +557,11 @@ model Quote {
   validDays   Int         @default(14)
   validUntil  DateTime?
   notes       String      @default("")
+  documentMode String     @default("STANDARD")
+  exportQuote Boolean     @default(false)
+  references  String      @default("")
+  pdf         Bytes?
+  pdfFilename String      @default("")
   sentAt      DateTime?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
@@ -577,6 +584,13 @@ model QuoteLine {
   unitPriceCents Int
   specifications String   @default("")
   imageUrls      String[] @default([])
+  sku            String   @default("")
+  modelName      String   @default("")
+  manufacturerPartNumber String @default("")
+  availability   String   @default("")
+  leadTime       String   @default("")
+  warranty       String   @default("")
+  requirementText String  @default("")
   sourceKind     String   @default("")
   sourceUrl      String   @default("")
   sourceCheckedAt DateTime?
@@ -639,8 +653,38 @@ model Supplier {
 
   workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   prices    SupplierPrice[]
+  feedItems SupplierFeedItem[]
 
   @@index([workspaceId])
+}
+
+model SupplierFeedItem {
+  id                     String   @id @default(cuid())
+  workspaceId            String
+  supplierId             String
+  supplierSku            String
+  manufacturerPartNumber String   @default("")
+  name                   String   @default("")
+  brand                  String   @default("")
+  description            String   @default("")
+  specifications         String   @default("")
+  category               String   @default("")
+  imageUrls              String[] @default([])
+  leadTimeDays           Int?
+  costCents              Int      @default(0)
+  costKnown              Boolean  @default(false)
+  stockQty               Int      @default(0)
+  stockKnown             Boolean  @default(false)
+  productId              String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  product  Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@unique([supplierId, supplierSku])
+  @@index([workspaceId])
+  @@index([productId])
 }
 
 model SupplierPrice {

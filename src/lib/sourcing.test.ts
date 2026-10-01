@@ -16,7 +16,7 @@ const now = new Date("2026-10-01T18:00:00.000Z");
 
 const candidate = (overrides: Partial<SourcingCandidate>): SourcingCandidate => ({
   sourceKind: "SUPPLIER_FEED",
-  sourceName: "Frontosa",
+  sourceName: "Supplier feed",
   sourceUrl: "",
   sourceType: "DISTRIBUTOR",
   productId: "prod-1",
@@ -119,6 +119,24 @@ test("out of stock continues to another supplier instead of stopping", () => {
   assert.equal(plan.options[0]?.sourceName, "Supplier B");
   assert.match(plan.options[0]?.name ?? "", /ThinkPad E14/);
   assert.equal(plan.options[0]?.stockQty, 6);
+});
+
+test("a supplier row that is not an Urban Focus product can still be quoted", () => {
+  const [requirement] = extractProductRequirements("Please quote 2 x Lenovo ThinkPad E14.");
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: {
+      ...emptyPools(),
+      supplierFeeds: [candidate({ productId: null, sourceName: "Distributor", sku: "SUP-E14" })],
+    },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "QUOTE");
+  if (plan.kind !== "QUOTE") return;
+  assert.equal(plan.options[0]?.productId, null);
+  assert.equal(plan.options[0]?.sourceName, "Distributor");
+  assert.match(plan.options[0]?.name ?? "", /ThinkPad E14/);
 });
 
 test("a missing catalogue SKU can be drafted from a verified external source", () => {

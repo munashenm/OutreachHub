@@ -183,8 +183,8 @@ test("matches an existing store product by part number before creating one", () 
 
 test("uses a confirmed supplier sku mapping and ignores a fuzzy name match for merging", () => {
   const items = [identity({ storeProductId: "41", sku: "SW-24", name: "Lenovo ThinkBook 16 G9" })];
-  const confirmed = new Map([["FRONTOSA-1", "41"]]);
-  const matched = matchStoreProduct({ supplierSku: "frontosa-1", name: "Something else" }, items, confirmed);
+  const confirmed = new Map([["SUPPLIER-1", "41"]]);
+  const matched = matchStoreProduct({ supplierSku: "supplier-1", name: "Something else" }, items, confirmed);
   assert.equal(matched.outcome, "MATCHED");
   if (matched.outcome === "MATCHED") assert.equal(matched.by, "supplierSku");
   assert.equal(sharesDuplicateKey(

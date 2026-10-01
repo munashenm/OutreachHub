@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { PrintButton } from "@/components/print-button";
-import { formatCents, formatQuoteDate, formatQuoteNumber, lineTotalCents, quoteTotalCents } from "@/lib/quote";
+import { formatCents, formatQuoteDate, lineTotalCents, quoteTotalCents } from "@/lib/quote";
+import { urbanFocusQuoteNumber } from "@/lib/quotation-document";
 import { fullName } from "@/lib/format";
 import { requireSession } from "@/services/auth-service";
 import { getQuoteDocument } from "@/services/quote-service";
@@ -25,11 +25,11 @@ export default async function QuoteDocumentPage({ params }: { params: Promise<{ 
     <article className="mx-auto max-w-3xl space-y-6">
       <div className="flex items-center justify-between print:hidden">
         <Link href={`/rfqs/${quote.rfqId}`} className="text-sm text-accent">Back to RFQ</Link>
-        <PrintButton />
+        <a className="text-sm text-accent" href={`/api/quotes/${quote.id}/pdf`}>View Sent PDF</a>
       </div>
       <header>
         <p className="text-sm text-muted">Quotation</p>
-        <h1 className="text-2xl font-semibold">{formatQuoteNumber(quote.number, quote.issuedAt)}</h1>
+        <h1 className="text-2xl font-semibold">{urbanFocusQuoteNumber(quote.number, quote.issuedAt)}</h1>
         <p className="mt-2 text-sm">Issued {formatQuoteDate(quote.issuedAt)}</p>
         <p className="text-sm">Valid until {formatQuoteDate(quote.validUntil)}</p>
       </header>

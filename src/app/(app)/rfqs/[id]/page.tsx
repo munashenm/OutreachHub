@@ -93,6 +93,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
         <div className="mt-4">
           <QuotePanel
             rfqId={rfq.id}
+            quoteId={draft?.id ?? null}
             currency={draft?.currency ?? "ZAR"}
             sent={false}
             lines={(draft?.lines ?? []).map((line) => ({
@@ -126,6 +127,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
                   <Link className="hover:underline" href={`/quotes/${quote.id}`}>{formatQuoteNumber(quote.number, quote.issuedAt)}</Link>
                 ) : "Quotation"}
                 {" "}sent {quote.sentAt ? formatDateTime(quote.sentAt) : ""} · {quote.lines.length} lines
+                {" "}· <a className="hover:underline" href={`/api/quotes/${quote.id}/pdf`}>View Sent PDF</a>
               </li>
             ))}
           </ul>
