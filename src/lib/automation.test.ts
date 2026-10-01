@@ -8,8 +8,10 @@ import {
   classifyInbound,
   extractRfqRequest,
   factualReply,
+  groundAiRfqExtraction,
   imagesFromProductPage,
   matchRfqLine,
+  mergeRfqExtraction,
   nameKey,
   newProductDecision,
   priceQuotation,
@@ -37,6 +39,49 @@ test("classifies a quotation request and ignores an outbound campaign reply", ()
   assert.equal(classifyInbound({ subject: "Re: newsletter", body: "Thanks", campaignReply: true }), "CAMPAIGN_REPLY");
   assert.equal(classifyCustomerReply("We accept the quotation"), "QUOTE_ACCEPTED");
   assert.equal(classifyCustomerReply("Can you do a better price?"), "PRICE_NEGOTIATION");
+});
+
+test("keeps a stated quantity phrase and does not invent a prose product", () => {
+  const stated = extractRfqRequest("Please quote 2 x Lenovo ThinkPad E14 business laptops.");
+  assert.equal(stated.lines.length, 1);
+  assert.equal(stated.lines[0]?.quantity, 2);
+  assert.match(stated.lines[0]?.description ?? "", /ThinkPad E14/);
+  assert.equal(stated.lines[0]?.sku, "");
+  const prose = [
+    "Please quote 5 Lenovo ThinkPad E14 laptops.",
+    "We need 10 HP laptops with Core i5, 16GB RAM and 512GB SSD.",
+    "Kindly provide pricing for 20 units of D11G8ET.",
+    "Please send a quote for five laptops, Core i5, 16GB RAM, 512GB SSD and Windows 11 Pro.",
+  ];
+  for (const body of prose) assert.deepEqual(extractRfqRequest(body).lines, []);
+});
+
+test("uses grounded AI lines only when the deterministic extract is empty", () => {
+  const source = "Please quote 5 Lenovo ThinkPad E14 laptops.";
+  const grounded = groundAiRfqExtraction({
+    customerName: "Invented Person",
+    lines: [{
+      description: "5 Lenovo ThinkPad E14 laptops",
+      quantity: 5,
+      manufacturer: "Lenovo",
+      model: "ThinkPad E14",
+      sku: "INVENTED-SKU",
+      manufacturerPartNumber: "",
+      specifications: "16GB RAM",
+    }],
+  }, source);
+  assert.equal(grounded.customerName, "");
+  assert.equal(grounded.lines[0]?.quantity, 5);
+  assert.equal(grounded.lines[0]?.manufacturer, "Lenovo");
+  assert.equal(grounded.lines[0]?.sku, "");
+  assert.equal(grounded.lines[0]?.specifications, "");
+  const deterministic = extractRfqRequest("2 x HP laptop model D11G8ET");
+  const merged = mergeRfqExtraction(deterministic, grounded);
+  assert.equal(merged.lines[0]?.manufacturerPartNumber, "D11G8ET");
+  const words = "Please send a quote for five laptops, Core i5, 16GB RAM, 512GB SSD and Windows 11 Pro.";
+  const worded = groundAiRfqExtraction({ lines: [{ description: "five laptops, Core i5, 16GB RAM, 512GB SSD and Windows 11 Pro", quantity: 5, specifications: "Core i5, 16GB RAM, 512GB SSD and Windows 11 Pro" }] }, words);
+  assert.equal(worded.lines[0]?.quantity, 5);
+  assert.match(worded.lines[0]?.specifications ?? "", /Windows 11 Pro/);
 });
 
 test("extracts only details that are written in the email", () => {

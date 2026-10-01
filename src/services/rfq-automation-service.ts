@@ -6,8 +6,10 @@ import {
   classifyInbound,
   extractRfqRequest,
   factualReply,
+  groundAiRfqExtraction,
   isQuotationRequest,
   matchRfqLine,
+  mergeRfqExtraction,
   priceQuotation,
   type CatalogueHit,
   type InboundKind,
@@ -19,6 +21,7 @@ import { getDb, isUniqueViolation } from "../lib/db";
 import { AppError } from "../lib/errors";
 import { chooseSupplierOffer, priceChangeNeedsApproval } from "../lib/supplier-connector";
 import { recordActivity } from "./activity-service";
+import { extractQuotationFields } from "./ai-service";
 import { sendQuote } from "./quote-service";
 import { sendThreadReply } from "./reply-service";
 
@@ -141,8 +144,20 @@ async function handleQuoteReply(message: { id: string; workspaceId: string; body
   await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
 }
 
+async function extractInboundRfq(body: string) {
+  const extracted = extractRfqRequest(body);
+  if (extracted.lines.length > 0) return extracted;
+  try {
+    const raw = await extractQuotationFields(body);
+    if (!raw) return extracted;
+    return mergeRfqExtraction(extracted, groundAiRfqExtraction(raw, body));
+  } catch {
+    return extracted;
+  }
+}
+
 async function createRfq(message: { id: string; workspaceId: string; subject: string; body: string; fromEmail: string | null; fromName: string | null; prospectId: string | null }) {
-  const extracted = extractRfqRequest(message.body);
+  const extracted = await extractInboundRfq(message.body);
   const email = extracted.email || message.fromEmail || "";
   const prospect = message.prospectId
     ? await getDb().prospect.findFirst({ where: { id: message.prospectId, workspaceId: message.workspaceId }, select: { id: true, companyId: true } })

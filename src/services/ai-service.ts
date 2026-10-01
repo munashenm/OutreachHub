@@ -53,3 +53,34 @@ export async function draftTemplate(input: { brief: string; name: string; subjec
   if (!draft) throw new AppError("OpenAI returned a draft that could not be used. Try a shorter brief.");
   return draft;
 }
+
+export async function extractQuotationFields(body: string): Promise<unknown | null> {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) return null;
+  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(20_000),
+    body: JSON.stringify({
+      model,
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: "Extract a quotation request as JSON. Use only words written in the email. Do not invent quantity, model, SKU, stock, price, specifications, or a catalogue product. Missing values are empty strings. Quantity is a number only when the email states one. Keys: customerName, companyName, reference, deliveryLocation, requiredDate, lines. Each line has description, quantity, manufacturer, model, sku, manufacturerPartNumber, specifications.",
+        },
+        { role: "user", content: body.slice(0, 8000) },
+      ],
+    }),
+  });
+  const json = (await response.json()) as { choices?: { message?: { content?: string } }[] };
+  if (!response.ok) return null;
+  const content = json.choices?.[0]?.message?.content ?? "";
+  try {
+    return JSON.parse(content) as unknown;
+  } catch {
+    return null;
+  }
+}

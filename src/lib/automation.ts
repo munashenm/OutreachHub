@@ -113,7 +113,7 @@ export function extractRfqRequest(body: string): ExtractedRfq {
   const referenceMatch = body.match(/\b(?:rfq|reference|ref|enquiry)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Z0-9][A-Z0-9./-]{2,})/i);
   const products: RfqLineDraft[] = [];
   for (const line of lines) {
-    const product = productLine(line);
+    const product = productLine(line) ?? inlineQuantity(line);
     if (product) products.push(product);
   }
   return {
@@ -351,6 +351,76 @@ function productLine(line: string): RfqLineDraft | null {
     manufacturerPartNumber,
     specifications: "",
   };
+}
+
+function inlineQuantity(line: string): RfqLineDraft | null {
+  const match = line.match(/\b(\d+)\s*[x×]\s+(.+?)\.?\s*$/i);
+  if (!match?.[1] || !match[2]) return null;
+  return productLine(`${match[1]} x ${match[2].replace(/\.$/, "")}`);
+}
+
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twenty: 20,
+};
+
+export function groundAiRfqExtraction(raw: unknown, source: string): ExtractedRfq {
+  const empty: ExtractedRfq = { customerName: "", companyName: "", email: "", reference: "", deliveryLocation: "", requiredDate: "", notes: "", lines: [] };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return empty;
+  const record = raw as Record<string, unknown>;
+  const text = (value: unknown) => {
+    if (typeof value !== "string") return "";
+    const trimmed = value.trim().slice(0, 300);
+    return trimmed && source.toLowerCase().includes(trimmed.toLowerCase()) ? trimmed : "";
+  };
+  const lines = Array.isArray(record.lines) ? record.lines.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const line = entry as Record<string, unknown>;
+    const quantity = groundedQuantity(line.quantity, source);
+    const description = text(line.description);
+    if (quantity == null || description.length < 2) return [];
+    const manufacturerPartNumber = text(line.manufacturerPartNumber).toUpperCase();
+    return [{
+      description,
+      quantity,
+      manufacturer: text(line.manufacturer),
+      model: text(line.model),
+      sku: text(line.sku).toUpperCase(),
+      manufacturerPartNumber,
+      specifications: text(line.specifications),
+    }];
+  }) : [];
+  return {
+    customerName: text(record.customerName),
+    companyName: text(record.companyName),
+    email: text(record.email).toLowerCase(),
+    reference: text(record.reference),
+    deliveryLocation: text(record.deliveryLocation),
+    requiredDate: text(record.requiredDate),
+    notes: "",
+    lines,
+  };
+}
+
+export function mergeRfqExtraction(base: ExtractedRfq, grounded: ExtractedRfq): ExtractedRfq {
+  if (base.lines.length > 0) return base;
+  return {
+    customerName: base.customerName || grounded.customerName,
+    companyName: base.companyName || grounded.companyName,
+    email: base.email || grounded.email,
+    reference: base.reference || grounded.reference,
+    deliveryLocation: base.deliveryLocation || grounded.deliveryLocation,
+    requiredDate: base.requiredDate || grounded.requiredDate,
+    notes: "",
+    lines: grounded.lines,
+  };
+}
+
+function groundedQuantity(value: unknown, source: string) {
+  const quantity = typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value.trim()) : null;
+  if (quantity == null || !Number.isInteger(quantity) || quantity <= 0 || quantity > 100000) return null;
+  if (new RegExp(`\\b${quantity}\\b`).test(source)) return quantity;
+  const word = Object.entries(NUMBER_WORDS).find(([, number]) => number === quantity)?.[0];
+  return word && new RegExp(`\\b${word}\\b`, "i").test(source) ? quantity : null;
 }
 
 function token(value: string, pattern: RegExp) {
