@@ -12,12 +12,21 @@ import {
 } from "../lib/catalogue-reconcile";
 import { loadStoreProvider } from "./store/load";
 
+async function listCataloguePage(provider: { listCatalogue(page: number, perPage: number): Promise<unknown> }, page: number, perPage: number) {
+  try {
+    return await provider.listCatalogue(page, perPage);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    return provider.listCatalogue(page, perPage);
+  }
+}
+
 function safeCatalogueFailure(error: unknown) {
   if (error instanceof AppError) return error.message;
   if (error instanceof Prisma.PrismaClientKnownRequestError) return `The catalogue could not be saved (${error.code}).`;
   if (error instanceof Prisma.PrismaClientValidationError) return "The catalogue page included a value that could not be saved.";
   if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) return "The store catalogue request timed out.";
-  return "The store catalogue could not be read.";
+  return error instanceof Error ? `The store catalogue could not be read (${error.name}).` : "The store catalogue could not be read.";
 }
 
 const PAGE_SIZE = 40;
@@ -45,7 +54,7 @@ export async function readStoreCatalogueBatch(workspaceId: string) {
   const scanId = scan.id;
   let parsed;
   try {
-    const body = await loaded.provider.listCatalogue(scan.page, scan.perPage);
+    const body = await listCataloguePage(loaded.provider, scan.page, scan.perPage);
     const page = parseStoreCataloguePage(body);
     if ("error" in page) throw new AppError(page.error);
     parsed = page;
@@ -56,7 +65,9 @@ export async function readStoreCatalogueBatch(workspaceId: string) {
   }
   const products = [...new Map(parsed.products.map((product) => [product.storeProductId, product])).values()];
   if (products.length > 0) {
-    await db.$transaction(products.map((product) => db.storeCatalogueItem.upsert({
+    for (let index = 0; index < products.length; index += 10) {
+      const chunk = products.slice(index, index + 10);
+      await db.$transaction(chunk.map((product) => db.storeCatalogueItem.upsert({
       where: { workspaceId_storeProductId: { workspaceId, storeProductId: product.storeProductId } },
       create: {
         workspaceId,
@@ -110,7 +121,8 @@ export async function readStoreCatalogueBatch(workspaceId: string) {
         url: product.url,
         storeUpdatedAt: product.storeUpdatedAt ? new Date(product.storeUpdatedAt) : null,
       },
-    })), { timeout: 20_000 });
+      })), { timeout: 15_000 });
+    }
   }
   const imported = scan.imported + parsed.products.length;
   if (scan.page < parsed.lastPage) {
