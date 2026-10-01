@@ -71,6 +71,13 @@ export function formatCents(cents: number, currency = "ZAR") {
   return `${currency} ${whole}.${fraction}`;
 }
 
+export function snapshotQuoteLine(product: { specifications: string; imageUrls: string[] } | null) {
+  return {
+    specifications: product?.specifications ?? "",
+    imageUrls: [...(product?.imageUrls ?? [])],
+  };
+}
+
 export function formatQuoteEmail(input: {
   subject: string;
   currency: string;

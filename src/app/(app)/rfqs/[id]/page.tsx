@@ -55,7 +55,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
       </Panel>
       <Panel className="p-5">
         <h2 className="font-semibold">Quote</h2>
-        <p className="mt-1 text-sm text-muted">Lines are priced from the catalogue or typed in. Sending uses the connected Gmail mailbox and stays in this thread.</p>
+        <p className="mt-1 text-sm text-muted">Lines are priced from the catalogue or typed in. The draft follows the current product specification and images. Sending uses the connected Gmail mailbox, stays in this thread, and keeps that copy on the quotation.</p>
         <div className="mt-4">
           <QuotePanel
             rfqId={rfq.id}

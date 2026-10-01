@@ -1,7 +1,7 @@
 import { Prisma } from "../generated/prisma/client";
 import { getDb } from "../lib/db";
 import { AppError } from "../lib/errors";
-import { formatQuoteEmail, formatQuoteNumber, parseMoneyToCents, parseQuantity, quoteValidUntil } from "../lib/quote";
+import { formatQuoteEmail, formatQuoteNumber, parseMoneyToCents, parseQuantity, quoteValidUntil, snapshotQuoteLine } from "../lib/quote";
 import { ownedByWorkspace } from "../lib/gmail-sync";
 import { recordActivity } from "./activity-service";
 import { getRfq } from "./rfq-service";
@@ -100,7 +100,7 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
       });
       number = workspace.quoteSequence;
     }
-    return tx.quote.update({
+    const updated = await tx.quote.update({
       where: { id: quote.id },
       data: {
         number,
@@ -111,6 +111,16 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
       },
       include: { lines: { include: { product: { select: { specifications: true, imageUrls: true } } } } },
     });
+    const lines = [];
+    for (const line of updated.lines) {
+      const shot = snapshotQuoteLine(line.product);
+      await tx.quoteLine.update({
+        where: { id: line.id },
+        data: { specifications: shot.specifications, imageUrls: shot.imageUrls },
+      });
+      lines.push({ ...line, specifications: shot.specifications, imageUrls: shot.imageUrls });
+    }
+    return { ...updated, lines };
   });
   if (prepared.number == null || prepared.issuedAt == null || prepared.validUntil == null) {
     throw new AppError("The quotation number could not be assigned.");
@@ -130,8 +140,8 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
       description: line.description,
       quantity: Number(line.quantity),
       unitPriceCents: line.unitPriceCents,
-      specifications: line.product?.specifications ?? "",
-      imageUrls: line.product?.imageUrls ?? [],
+      specifications: line.specifications,
+      imageUrls: line.imageUrls,
     })),
   });
   await sendThreadReply(actor, {

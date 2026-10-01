@@ -17,8 +17,8 @@ export default async function QuoteDocumentPage({ params }: { params: Promise<{ 
     description: line.description,
     quantity: Number(line.quantity),
     unitPriceCents: line.unitPriceCents,
-    specifications: line.product?.specifications ?? "",
-    imageUrls: line.product?.imageUrls ?? [],
+    specifications: quote.status === "SENT" ? line.specifications : line.product?.specifications ?? "",
+    imageUrls: quote.status === "SENT" ? line.imageUrls : line.product?.imageUrls ?? [],
   }));
   const total = quoteTotalCents(lines);
   return (
@@ -62,7 +62,7 @@ export default async function QuoteDocumentPage({ params }: { params: Promise<{ 
       </table>
       <p className="text-sm font-medium">Total {total === null ? "—" : formatCents(total, quote.currency)}</p>
       {quote.notes ? <p className="whitespace-pre-wrap text-sm">{quote.notes}</p> : null}
-      <p className="text-sm">This is a quotation for the enquiry in this thread. It is not a promotional message.</p>
+      <p className="text-sm">This is a quotation for the enquiry in this thread. It is not a promotional message. The specification and image addresses are the copies saved when this quotation was sent.</p>
     </article>
   );
 }

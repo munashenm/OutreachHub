@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatQuoteEmail, formatQuoteNumber, lineTotalCents, parseMoneyToCents, parseQuantity, quoteTotalCents, quoteValidUntil } from "./quote";
+import { formatQuoteEmail, formatQuoteNumber, lineTotalCents, parseMoneyToCents, parseQuantity, quoteTotalCents, quoteValidUntil, snapshotQuoteLine } from "./quote";
 
 test("parses rand amounts and quantities", () => {
   assert.equal(parseMoneyToCents("1 299,50"), 129950);
@@ -52,4 +52,18 @@ test("formats a quotation email without marking it sent", () => {
   });
   assert.match(detailed, /24 gigabit ports/);
   assert.match(detailed, /https:\/\/cdn\.example\/switch\.jpg/);
+});
+
+test("copies the catalogue specification and images onto a sent line", () => {
+  const shot = snapshotQuoteLine({
+    specifications: "24 gigabit ports",
+    imageUrls: ["https://cdn.example/switch.jpg"],
+  });
+  assert.deepEqual(shot, {
+    specifications: "24 gigabit ports",
+    imageUrls: ["https://cdn.example/switch.jpg"],
+  });
+  assert.deepEqual(snapshotQuoteLine(null), { specifications: "", imageUrls: [] });
+  shot.imageUrls.push("https://cdn.example/other.jpg");
+  assert.deepEqual(snapshotQuoteLine({ specifications: "24 gigabit ports", imageUrls: ["https://cdn.example/switch.jpg"] }).imageUrls, ["https://cdn.example/switch.jpg"]);
 });

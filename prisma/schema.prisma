@@ -520,6 +520,8 @@ model QuoteLine {
   description    String
   quantity       Decimal @db.Decimal(12, 2)
   unitPriceCents Int
+  specifications String   @default("")
+  imageUrls      String[] @default([])
 
   quote   Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
   product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
