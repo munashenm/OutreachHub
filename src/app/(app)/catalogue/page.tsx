@@ -59,8 +59,10 @@ export default async function CataloguePage({
       {stats ? (
         <Panel className="mb-4 p-4 text-sm">
           <dl className="grid gap-2 sm:grid-cols-2">
-            <div>With a manufacturer part number: {stats.withMpn}</div>
-            <div>With a barcode: {stats.withBarcode}</div>
+            <div>Missing a manufacturer part number: {stats.missingMpn}</div>
+            <div>Missing a barcode: {stats.missingBarcode}</div>
+            <div>Published: {stats.published}</div>
+            <div>Unpublished: {stats.unpublished}</div>
             <div>Matched to a staff catalogue product: {stats.matchedToCatalogue}</div>
             <div>New products created: 0</div>
             <div>Stock differences: not compared yet</div>

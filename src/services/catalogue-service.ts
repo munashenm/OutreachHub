@@ -4,6 +4,7 @@ import { AppError } from "../lib/errors";
 import {
   analyseCatalogue,
   parseStoreCataloguePage,
+  secretFieldPaths,
   sharesDuplicateKey,
   skuKey,
   type CatalogueRecord,
@@ -106,6 +107,72 @@ export async function readStoreCatalogueBatch(workspaceId: string) {
   }
   const stats = await finishCatalogueScan(workspaceId, scan.id, imported, parsed.total);
   return { done: true, imported: stats.total, total: stats.total, stats };
+}
+
+export async function verifyStoreCatalogueAccess(workspaceId: string) {
+  const loaded = await loadStoreProvider(workspaceId);
+  if (!loaded) throw new AppError("Connect the store under Settings before reading the catalogue.");
+  const first = await loaded.provider.listCatalogue(1, 1);
+  const repeat = await loaded.provider.listCatalogue(1, 1);
+  const parsed = parseStoreCataloguePage(first);
+  const repeated = parseStoreCataloguePage(repeat);
+  if ("error" in parsed) throw new AppError(parsed.error);
+  if ("error" in repeated) throw new AppError(repeated.error);
+  const sample = parsed.products[0];
+  const repeatedSample = repeated.products[0];
+  let secondPageDifferent = parsed.total <= 1;
+  if (parsed.total > 1) {
+    const second = parseStoreCataloguePage(await loaded.provider.listCatalogue(2, 1));
+    if ("error" in second) throw new AppError(second.error);
+    secondPageDifferent = second.products[0]?.storeProductId !== sample?.storeProductId;
+  }
+  const lookupKnown = sample?.sku
+    ? Boolean((await loaded.provider.findByIdentity({ sku: sample.sku }))?.sku)
+    : sample?.manufacturerPartNumber
+      ? Boolean((await loaded.provider.findByIdentity({ mpn: sample.manufacturerPartNumber }))?.sku)
+      : sample?.barcode
+        ? Boolean((await loaded.provider.findByIdentity({ barcode: sample.barcode }))?.sku)
+        : false;
+  const lookupMissing = await loaded.provider.findByIdentity({ sku: "UF-BASELINE-MISSING-000" });
+  return {
+    total: parsed.total,
+    lastPage: parsed.lastPage,
+    perPage: parsed.perPage,
+    secondPageDifferent,
+    updatedAtUnchanged: sample?.storeUpdatedAt === repeatedSample?.storeUpdatedAt,
+    lookupKnown,
+    lookupMissing: lookupMissing === null,
+    secretFields: secretFieldPaths(first),
+  };
+}
+
+export async function readCatalogueForCron() {
+  const workspaces = await getDb().workspace.findMany({
+    where: { storeName: { not: null }, storePublicUrl: { not: null }, storeBaseUrl: { not: null }, storeKeyEncrypted: { not: null } },
+    select: { id: true },
+  });
+  const results = [];
+  for (const workspace of workspaces) {
+    try {
+      const running = await getDb().storeCatalogueScan.findFirst({
+        where: { workspaceId: workspace.id, status: "RUNNING" },
+        select: { imported: true },
+      });
+      const checks = running ? null : await verifyStoreCatalogueAccess(workspace.id);
+      const result = await readStoreCatalogueBatch(workspace.id);
+      results.push({ done: result.done, imported: result.imported, total: result.total, stats: result.stats, checks, error: null as string | null });
+    } catch (error) {
+      results.push({
+        done: false,
+        imported: 0,
+        total: 0,
+        stats: null,
+        checks: null,
+        error: error instanceof AppError ? error.message : "The store catalogue could not be read.",
+      });
+    }
+  }
+  return results;
 }
 
 export async function baselineIdentities(workspaceId: string) {
@@ -231,6 +298,7 @@ async function finishCatalogueScan(workspaceId: string, scanId: string, imported
       unitPriceCents: true,
       stockQuantity: true,
       imageUrls: true,
+      published: true,
       productId: true,
       reviewStatus: true,
       duplicateKinds: true,
@@ -248,6 +316,7 @@ async function finishCatalogueScan(workspaceId: string, scanId: string, imported
     unitPriceCents: row.unitPriceCents,
     stockQuantity: row.stockQuantity,
     imageCount: row.imageUrls.length,
+    published: row.published,
     productId: row.productId,
     reviewStatus: row.reviewStatus,
   }));

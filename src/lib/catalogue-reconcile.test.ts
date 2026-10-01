@@ -8,6 +8,7 @@ import {
   mpnKey,
   parseStoreCataloguePage,
   recommendedCatalogueAction,
+  secretFieldPaths,
   sharesDuplicateKey,
   skuKey,
   type CatalogueRecord,
@@ -26,6 +27,7 @@ function record(overrides: Partial<CatalogueRecord> & Pick<CatalogueRecord, "id"
     unitPriceCents: 1000,
     stockQuantity: 2,
     imageCount: 1,
+    published: true,
     productId: null,
     reviewStatus: "BASELINE",
     ...overrides,
@@ -94,7 +96,7 @@ test("rejects a catalogue page that is not a product list", () => {
 
 test("counts the baseline and keeps duplicate blanks out of the duplicate totals", () => {
   const { stats, flags } = analyseCatalogue([
-    record({ id: "a", storeProductId: "1", sku: "SW-24", skuKey: "SW-24", mpnKey: "MPN24", barcodeKey: "6001234567890", brandModelKey: "HP|D11G8ET", imageCount: 0, unitPriceCents: 0, stockQuantity: 0 }),
+    record({ id: "a", storeProductId: "1", sku: "SW-24", skuKey: "SW-24", mpnKey: "MPN24", barcodeKey: "6001234567890", brandModelKey: "HP|D11G8ET", imageCount: 0, unitPriceCents: 0, stockQuantity: 0, published: false }),
     record({ id: "b", storeProductId: "2", sku: "SW-24", skuKey: "SW-24", mpnKey: "MPN24", barcodeKey: "6001234567890", brandModelKey: "HP|D11G8ET" }),
     record({ id: "c", storeProductId: "3", sku: "SW-25", skuKey: "SW-25", productId: "local-1" }),
     record({ id: "d", storeProductId: "4" }),
@@ -104,7 +106,11 @@ test("counts the baseline and keeps duplicate blanks out of the duplicate totals
   assert.equal(stats.withSku, 3);
   assert.equal(stats.withoutSku, 2);
   assert.equal(stats.withMpn, 2);
+  assert.equal(stats.missingMpn, 3);
   assert.equal(stats.withBarcode, 2);
+  assert.equal(stats.missingBarcode, 3);
+  assert.equal(stats.published, 4);
+  assert.equal(stats.unpublished, 1);
   assert.equal(stats.missingImages, 1);
   assert.equal(stats.withImages, 4);
   assert.equal(stats.zeroStock, 1);
@@ -164,6 +170,12 @@ test("uses a confirmed supplier sku mapping and ignores a fuzzy name match for m
 test("recommends a review for duplicates and missing images", () => {
   assert.match(recommendedCatalogueAction({ duplicateKinds: "sku", skuKey: "SW-24", mpnKey: "", imageCount: 1, unitPriceCents: 100 }), /duplicate/i);
   assert.match(recommendedCatalogueAction({ duplicateKinds: "", skuKey: "SW-24", mpnKey: "MPN", imageCount: 0, unitPriceCents: 100 }), /image/i);
+});
+
+test("names secret fields without returning their values", () => {
+  const paths = secretFieldPaths({ api_key: "hidden-value", products: [{ name: "Switch", supplier_cost: "10" }] });
+  assert.deepEqual(paths, ["api_key", "products.0.supplier_cost"]);
+  assert.equal(paths.join(" ").includes("hidden-value"), false);
 });
 
 test("uses the selected supplier quantity instead of adding every supplier together", () => {

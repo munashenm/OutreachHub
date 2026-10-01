@@ -44,6 +44,7 @@ export type CatalogueRecord = {
   unitPriceCents: number;
   stockQuantity: number;
   imageCount: number;
+  published: boolean;
   productId: string | null;
   reviewStatus: string;
 };
@@ -53,7 +54,9 @@ export type CatalogueStats = {
   withSku: number;
   withoutSku: number;
   withMpn: number;
+  missingMpn: number;
   withBarcode: number;
+  missingBarcode: number;
   withImages: number;
   missingImages: number;
   zeroStock: number;
@@ -69,6 +72,8 @@ export type CatalogueStats = {
   readyForSupplierMatching: number;
   matchedToCatalogue: number;
   needsReview: number;
+  published: number;
+  unpublished: number;
 };
 
 export type StoreIdentity = {
@@ -156,7 +161,9 @@ export function analyseCatalogue(records: readonly CatalogueRecord[]) {
     withSku: records.filter((record) => record.skuKey !== "").length,
     withoutSku: records.filter((record) => record.skuKey === "").length,
     withMpn: records.filter((record) => record.mpnKey !== "").length,
+    missingMpn: records.filter((record) => record.mpnKey === "").length,
     withBarcode: records.filter((record) => record.barcodeKey !== "").length,
+    missingBarcode: records.filter((record) => record.barcodeKey === "").length,
     withImages: records.filter((record) => record.imageCount > 0).length,
     missingImages: records.filter((record) => record.imageCount === 0).length,
     zeroStock: records.filter((record) => record.stockQuantity <= 0).length,
@@ -172,6 +179,8 @@ export function analyseCatalogue(records: readonly CatalogueRecord[]) {
     readyForSupplierMatching: ready,
     matchedToCatalogue: records.filter((record) => record.productId).length,
     needsReview: records.filter((record) => duplicateIds.has(record.id) || record.reviewStatus === "MATCH_REVIEW_REQUIRED" || record.reviewStatus === "IMAGE_REVIEW_REQUIRED").length,
+    published: records.filter((record) => record.published).length,
+    unpublished: records.filter((record) => !record.published).length,
   };
   return { stats, flags };
 }
@@ -371,4 +380,18 @@ function fuzzySuggestion(name: string, items: readonly StoreIdentity[]) {
 
 function nameTokens(name: string) {
   return name.toUpperCase().split(/[^A-Z0-9]+/).filter((token) => token.length >= 4);
+}
+
+const SECRET_FIELD = /api[_-]?key|password|secret|token|cost[_-]?price|supplier[_-]?cost/i;
+
+export function secretFieldPaths(value: unknown, path = ""): string[] {
+  if (!value || typeof value !== "object") return [];
+  const found: string[] = [];
+  const entries = Array.isArray(value) ? value.map((entry, index) => [String(index), entry] as const) : Object.entries(value as Record<string, unknown>);
+  for (const [key, child] of entries) {
+    const next = path ? `${path}.${key}` : key;
+    if (!Array.isArray(value) && SECRET_FIELD.test(key)) found.push(next);
+    if (found.length < 20) found.push(...secretFieldPaths(child, next));
+  }
+  return found.slice(0, 20);
 }
