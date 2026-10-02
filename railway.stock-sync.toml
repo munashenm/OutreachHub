@@ -6,5 +6,5 @@ buildCommand = "echo Stock sync runner"
 
 [deploy]
 startCommand = "node scripts/stock-sync.mjs"
-cronSchedule = "5 * * * *"
+cronSchedule = "0 19 * * *"
 restartPolicyType = "NEVER"
