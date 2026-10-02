@@ -1,5 +1,5 @@
 import { AppError } from "../../lib/errors";
-import { assertPublicHttpsUrl } from "../../lib/stock";
+import { assertPublicHttpsUrl, storeRequestShouldRetry } from "../../lib/stock";
 import type { StoreCatalogProduct, StoreCredentials, StoreProvider } from "./types";
 
 export function createUrbanFocusStore(credentials: StoreCredentials): StoreProvider {
@@ -9,20 +9,29 @@ export function createUrbanFocusStore(credentials: StoreCredentials): StoreProvi
   async function request(path: string, search: Record<string, string>, init?: RequestInit, timeoutMs = 20000) {
     const url = new URL(path.replace(/^\//, ""), `${base.origin}${base.pathname.replace(/\/$/, "")}/`);
     for (const [key, value] of Object.entries(search)) url.searchParams.set(key, value);
-    const response = await fetch(url, {
-      ...init,
-      redirect: "manual",
-      signal: AbortSignal.timeout(timeoutMs),
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`,
-        ...(init?.headers ?? {}),
-      },
-    });
-    if (response.status === 401 || response.status === 403) throw new AppError("The store rejected the API key.");
-    if (response.status >= 300 && response.status < 400) throw new AppError("The store API address must not redirect.");
-    return response;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const response = await fetch(url, {
+          ...init,
+          redirect: "manual",
+          signal: AbortSignal.timeout(timeoutMs),
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+            authorization: `Bearer ${token}`,
+            ...(init?.headers ?? {}),
+          },
+        });
+        if (response.status === 401 || response.status === 403) throw new AppError("The store rejected the API key.");
+        if (response.status >= 300 && response.status < 400) throw new AppError("The store API address must not redirect.");
+        return response;
+      } catch (error) {
+        lastError = error;
+        if (error instanceof AppError || attempt === 2 || !storeRequestShouldRetry(error)) throw error;
+      }
+    }
+    throw lastError;
   }
 
   async function send(path: string, method: string, body?: unknown) {

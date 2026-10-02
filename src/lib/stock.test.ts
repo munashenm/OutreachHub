@@ -1,11 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertPublicHttpsUrl, isShortStock, linesExceedingStock, markedUpCents, parseProductImageUrls, parseSupplierStockBody, priceAllowedByMargin, stockLeft, stockLevel } from "./stock";
+import { assertPublicHttpsUrl, isShortStock, linesExceedingStock, markedUpCents, parseProductImageUrls, parseSupplierStockBody, priceAllowedByMargin, quoteMarginBlock, sellMarginPercent, stockLeft, stockLevel, storePushErrorMessage, storeRequestShouldRetry } from "./stock";
+import { AppError } from "./errors";
 
 test("adds a percentage markup to a supplier cost", () => {
   assert.equal(markedUpCents(10000, 15), 11500);
   assert.equal(markedUpCents(89900, 0), 89900);
   assert.equal(markedUpCents(10000, -1), null);
+});
+
+test("retries a shop connection timeout and keeps a rejected key", () => {
+  const timeout = new TypeError("fetch failed");
+  timeout.cause = Object.assign(new Error("Connect Timeout Error"), { code: "UND_ERR_CONNECT_TIMEOUT" });
+  assert.equal(storeRequestShouldRetry(timeout), true);
+  assert.equal(storeRequestShouldRetry(new AppError("The store rejected the API key.")), false);
+});
+
+test("names a website timeout instead of a catalogue rejection", () => {
+  assert.equal(storePushErrorMessage(new AppError("The store returned 422.")), "The store returned 422.");
+  const timeout = new TypeError("fetch failed");
+  timeout.cause = new Error("Connect Timeout Error");
+  assert.match(storePushErrorMessage(timeout), /could not reach the Urban Focus website/);
+});
+
+test("keeps a line under the minimum margin off the customer quotation", () => {
+  assert.equal(sellMarginPercent(225, 281), 19);
+  assert.equal(sellMarginPercent(51500, 64375), 20);
+  assert.match(quoteMarginBlock(225, 281, 20) ?? "", /19% margin/);
+  assert.equal(quoteMarginBlock(51500, 64375, 20), null);
+  assert.equal(quoteMarginBlock(null, 281, 20), null);
+  assert.equal(quoteMarginBlock(225, 281, 0), null);
 });
 
 test("keeps a supplier price that is below the minimum margin off the store", () => {
