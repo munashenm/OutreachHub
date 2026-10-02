@@ -5,6 +5,6 @@
 buildCommand = "echo Catalogue read runner"
 
 [deploy]
-startCommand = "npm run cron:catalogue-read"
+startCommand = "node scripts/catalogue-read.mjs"
 cronSchedule = "35 * * * *"
 restartPolicyType = "NEVER"

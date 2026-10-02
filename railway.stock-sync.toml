@@ -5,6 +5,6 @@
 buildCommand = "echo Stock sync runner"
 
 [deploy]
-startCommand = "npm run cron:stock-sync"
+startCommand = "node scripts/stock-sync.mjs"
 cronSchedule = "5 * * * *"
 restartPolicyType = "NEVER"

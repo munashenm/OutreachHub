@@ -5,6 +5,6 @@
 buildCommand = "echo Campaign send runner"
 
 [deploy]
-startCommand = "npm run cron:send"
+startCommand = "node scripts/send.mjs"
 cronSchedule = "*/15 * * * *"
 restartPolicyType = "NEVER"
