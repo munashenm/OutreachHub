@@ -1,15 +1,22 @@
 import { Prisma } from "../generated/prisma/client";
 import { getDb } from "../lib/db";
 import { AppError } from "../lib/errors";
+import { acceptProductImage } from "../lib/automation";
 import {
   analyseCatalogue,
+  catalogueDifference,
+  mpnKey,
   parseStoreCataloguePage,
   secretFieldPaths,
   sharesDuplicateKey,
   skuKey,
+  type CatalogueOfferView,
   type CatalogueRecord,
   type CatalogueStats,
 } from "../lib/catalogue-reconcile";
+import { markedUpCents } from "../lib/stock";
+import { chooseSupplierOffer, selectedSupplierStock, type SupplierChoice } from "../lib/supplier-connector";
+import { verifiedProductImageUrls } from "./external-sourcing-service";
 import { loadStoreProvider } from "./store/load";
 
 async function listCataloguePage(provider: { listCatalogue(page: number, perPage: number): Promise<unknown> }, page: number, perPage: number) {
@@ -186,13 +193,20 @@ export async function readCatalogueForCron() {
         select: { imported: true },
       });
       const checks = running ? null : await verifyStoreCatalogueAccess(workspace.id);
-      const result = await readStoreCatalogueBatch(workspace.id);
-      results.push({ done: result.done, imported: result.imported, total: result.total, stats: result.stats, checks, error: null as string | null });
+      const started = Date.now();
+      let result = await readStoreCatalogueBatch(workspace.id);
+      let pages = 1;
+      while (!result.done && Date.now() - started < 45_000) {
+        result = await readStoreCatalogueBatch(workspace.id);
+        pages += 1;
+      }
+      results.push({ done: result.done, imported: result.imported, total: result.total, pages, stats: result.stats, checks, error: null as string | null });
     } catch (error) {
       results.push({
         done: false,
         imported: 0,
         total: 0,
+        pages: 0,
         stats: null,
         checks: null,
         error: safeCatalogueFailure(error),
@@ -233,14 +247,19 @@ export async function getCatalogueReport(workspaceId: string, view: string, page
     db.catalogueAudit.findMany({ where: { workspaceId }, orderBy: { createdAt: "desc" }, take: 15 }),
   ]);
   const currentPage = Math.max(1, page);
-  if (!scan) return { scan: null, running, items: [], total: 0, pageCount: 1, page: currentPage, audits, stats: null as CatalogueStats | null };
-  const where: Prisma.StoreCatalogueItemWhereInput = { scanId: scan.id, ...viewWhere(view) };
+  if (!scan) return { scan: null, running, items: [], total: 0, pageCount: 1, page: currentPage, audits, stats: null as CatalogueStats | null, differences: null as CatalogueDifferenceSummary | null };
+  const differences = await loadCatalogueComparisons(workspaceId, scan.id);
+  const filteredIds = view === "stock-diff" ? differences.stockIds : view === "price-diff" ? differences.priceIds : null;
+  const pageIds = filteredIds?.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE) ?? null;
+  const where: Prisma.StoreCatalogueItemWhereInput = pageIds
+    ? (pageIds.length === 0 ? { id: "__none__" } : { scanId: scan.id, id: { in: pageIds } })
+    : { scanId: scan.id, ...viewWhere(view) };
   const [total, items] = await Promise.all([
-    db.storeCatalogueItem.count({ where }),
+    filteredIds ? Promise.resolve(filteredIds.length) : db.storeCatalogueItem.count({ where }),
     db.storeCatalogueItem.findMany({
       where,
       orderBy: [{ name: "asc" }, { storeProductId: "asc" }],
-      skip: (currentPage - 1) * PAGE_SIZE,
+      skip: pageIds ? 0 : (currentPage - 1) * PAGE_SIZE,
       take: PAGE_SIZE,
       select: {
         id: true,
@@ -270,25 +289,28 @@ export async function getCatalogueReport(workspaceId: string, view: string, page
   return {
     scan,
     running,
-    items,
+    items: items.map((item) => ({ ...item, comparison: differences.byId.get(item.id) ?? null })),
     total,
     pageCount: Math.max(1, Math.ceil(total / PAGE_SIZE)),
     page: currentPage,
     audits,
     stats: readStats(scan.stats),
+    differences,
   };
 }
 
 export async function reviewCatalogueItem(workspaceId: string, itemId: string, action: "accept" | "reject" | "ignore" | "image") {
+  if (action === "image") return findCatalogueImage(workspaceId, itemId);
   const item = await ownedItem(workspaceId, itemId);
   const next = {
     accept: { reviewStatus: "ACCEPTED", action: "MATCH_ACCEPTED", summary: "Accepted the existing store product" },
     reject: { reviewStatus: "REJECTED", action: "MATCH_REJECTED", summary: "Rejected this match" },
     ignore: { reviewStatus: "IGNORED", action: "MATCH_IGNORED", summary: "Ignored this store product for supplier matching" },
-    image: { reviewStatus: "IMAGE_REVIEW_REQUIRED", action: "IMAGE_REVIEW_REQUIRED", summary: "Marked the image for review. No image was downloaded" },
   }[action];
   await getDb().storeCatalogueItem.update({ where: { id: item.id }, data: { reviewStatus: next.reviewStatus } });
-  await writeAudit(workspaceId, next.action, item.storeProductId, `${next.summary} ${label(item)}. The website was not changed.`);
+  const summary = `${next.summary} ${label(item)}. The website was not changed.`;
+  await writeAudit(workspaceId, next.action, item.storeProductId, summary);
+  return summary;
 }
 
 export async function mergeCatalogueItems(workspaceId: string, itemId: string, targetStoreProductId: string) {
@@ -432,6 +454,188 @@ async function writeAudit(workspaceId: string, action: string, storeProductId: s
 
 function label(item: { sku: string; name: string; storeProductId: string }) {
   return `${item.sku || "no SKU"} ${item.name} (${item.storeProductId})`.trim();
+}
+
+type CatalogueRowComparison = CatalogueOfferView & { stockDiffers: boolean; priceDiffers: boolean };
+
+type CatalogueDifferenceSummary = {
+  stockDifferences: number;
+  priceDifferences: number;
+  compared: number;
+  stockIds: string[];
+  priceIds: string[];
+  byId: Map<string, CatalogueRowComparison>;
+};
+
+type PricedChoice = SupplierChoice & { name: string; markupPercent: number; imageUrls: string[] };
+
+async function loadCatalogueComparisons(workspaceId: string, scanId: string): Promise<CatalogueDifferenceSummary> {
+  const db = getDb();
+  const [items, products, prices, feeds] = await Promise.all([
+    db.storeCatalogueItem.findMany({
+      where: { scanId },
+      orderBy: [{ name: "asc" }, { storeProductId: "asc" }],
+      select: { id: true, productId: true, skuKey: true, mpnKey: true, stockQuantity: true, unitPriceCents: true },
+    }),
+    db.product.findMany({ where: { workspaceId }, select: { id: true, unitPriceCents: true } }),
+    db.supplierPrice.findMany({
+      where: { workspaceId },
+      select: {
+        productId: true,
+        supplierId: true,
+        costCents: true,
+        costKnown: true,
+        stockQty: true,
+        stockKnown: true,
+        updatedAt: true,
+        leadTimeDays: true,
+        imageUrls: true,
+        supplier: { select: { name: true, preference: true, leadTimeDays: true, priceSyncIntervalMinutes: true, markupPercent: true } },
+      },
+    }),
+    db.supplierFeedItem.findMany({
+      where: { workspaceId },
+      select: {
+        productId: true,
+        supplierId: true,
+        supplierSku: true,
+        manufacturerPartNumber: true,
+        costCents: true,
+        costKnown: true,
+        stockQty: true,
+        stockKnown: true,
+        updatedAt: true,
+        leadTimeDays: true,
+        imageUrls: true,
+        supplier: { select: { name: true, preference: true, leadTimeDays: true, priceSyncIntervalMinutes: true, markupPercent: true } },
+      },
+    }),
+  ]);
+  const sellByProduct = new Map(products.map((product) => [product.id, product.unitPriceCents]));
+  const byProduct = new Map<string, PricedChoice[]>();
+  const bySku = new Map<string, PricedChoice[]>();
+  const byMpn = new Map<string, PricedChoice[]>();
+  const push = (map: Map<string, PricedChoice[]>, key: string, choice: PricedChoice) => {
+    if (!key) return;
+    const list = map.get(key) ?? [];
+    list.push(choice);
+    map.set(key, list);
+  };
+  for (const row of prices) push(byProduct, row.productId, pricedChoice(row));
+  for (const row of feeds) {
+    const choice = pricedChoice(row);
+    if (row.productId) push(byProduct, row.productId, choice);
+    push(bySku, skuKey(row.supplierSku), choice);
+    push(byMpn, mpnKey(row.manufacturerPartNumber), choice);
+  }
+  const now = new Date();
+  const byId = new Map<string, CatalogueRowComparison>();
+  const stockIds: string[] = [];
+  const priceIds: string[] = [];
+  let compared = 0;
+  for (const item of items) {
+    const choices = item.productId && byProduct.has(item.productId)
+      ? byProduct.get(item.productId) ?? []
+      : bySku.get(item.skuKey) ?? byMpn.get(item.mpnKey) ?? [];
+    const offer = offerView(choices, item.productId ? sellByProduct.get(item.productId) ?? null : null, now);
+    const difference = catalogueDifference(item, offer);
+    if (!difference.compared || !offer) continue;
+    compared += 1;
+    byId.set(item.id, { ...offer, stockDiffers: difference.stockDiffers, priceDiffers: difference.priceDiffers });
+    if (difference.stockDiffers) stockIds.push(item.id);
+    if (difference.priceDiffers) priceIds.push(item.id);
+  }
+  return { stockDifferences: stockIds.length, priceDifferences: priceIds.length, compared, stockIds, priceIds, byId };
+}
+
+function pricedChoice(row: {
+  supplierId: string;
+  costCents: number;
+  costKnown: boolean;
+  stockQty: number;
+  stockKnown: boolean;
+  updatedAt: Date;
+  leadTimeDays: number | null;
+  imageUrls: string[];
+  supplier: { name: string; preference: number; leadTimeDays: number | null; priceSyncIntervalMinutes: number; markupPercent: number };
+}): PricedChoice {
+  return {
+    supplierId: row.supplierId,
+    costCents: row.costKnown ? row.costCents : null,
+    costKnown: row.costKnown,
+    stockQty: row.stockKnown ? row.stockQty : null,
+    stockKnown: row.stockKnown,
+    updatedAt: row.updatedAt,
+    preference: row.supplier.preference,
+    leadTimeDays: row.leadTimeDays ?? row.supplier.leadTimeDays,
+    priceFreshMs: row.supplier.priceSyncIntervalMinutes * 60 * 1000,
+    name: row.supplier.name,
+    markupPercent: row.supplier.markupPercent,
+    imageUrls: row.imageUrls,
+  };
+}
+
+function offerView(choices: PricedChoice[], productSellCents: number | null, now: Date): CatalogueOfferView | null {
+  const chosen = chooseSupplierOffer(choices, 1, now);
+  const stockQty = choices.length > 0 ? selectedSupplierStock(choices, now) : null;
+  const named = chosen ? choices.find((choice) => choice.supplierId === chosen.supplierId) ?? null : null;
+  const costCents = chosen?.costCents ?? null;
+  const marked = costCents != null && named ? markedUpCents(costCents, named.markupPercent) : null;
+  const sellCents = productSellCents != null && productSellCents > 0 ? productSellCents : marked;
+  if (stockQty == null && (sellCents == null || sellCents <= 0)) return null;
+  return { supplierName: named?.name ?? "Catalogue", costCents, stockQty, sellCents };
+}
+
+async function findCatalogueImage(workspaceId: string, itemId: string) {
+  const item = await ownedItem(workspaceId, itemId);
+  const identity = { brand: item.brand, sku: item.sku, manufacturerPartNumber: item.manufacturerPartNumber };
+  const stored = await supplierImageUrls(workspaceId, item.productId, item.sku, item.manufacturerPartNumber);
+  const accepted = stored.filter((url) => acceptProductImage(url, identity));
+  const found = accepted.length > 0
+    ? accepted
+    : await verifiedProductImageUrls({ brand: item.brand, sku: item.sku, manufacturerPartNumber: item.manufacturerPartNumber, pageUrl: item.url });
+  if (found.length === 0) {
+    await getDb().storeCatalogueItem.update({ where: { id: item.id }, data: { reviewStatus: "IMAGE_REVIEW_REQUIRED" } });
+    const summary = `No verified image was found for ${label(item)}. It stays in image review. The website was not changed.`;
+    await writeAudit(workspaceId, "IMAGE_REVIEW_REQUIRED", item.storeProductId, summary);
+    return summary;
+  }
+  const imageUrls = [...item.imageUrls];
+  for (const url of found) {
+    if (!imageUrls.includes(url)) imageUrls.push(url);
+  }
+  const saved = imageUrls.slice(0, 8);
+  await getDb().storeCatalogueItem.update({
+    where: { id: item.id },
+    data: {
+      imageUrls: saved,
+      reviewStatus: item.reviewStatus === "IMAGE_REVIEW_REQUIRED" ? "BASELINE" : item.reviewStatus,
+    },
+  });
+  if (item.productId) {
+    const product = await getDb().product.findFirst({ where: { id: item.productId, workspaceId }, select: { imageUrls: true } });
+    if (product && product.imageUrls.length === 0) {
+      await getDb().product.update({ where: { id: item.productId }, data: { imageUrls: saved } });
+    }
+  }
+  const source = accepted.length > 0 ? "the supplier feed" : "a verified product page";
+  const summary = `Saved ${found.length} image address${found.length === 1 ? "" : "es"} from ${source} on ${label(item)}. The website was not changed.`;
+  await writeAudit(workspaceId, "IMAGE_SAVED", item.storeProductId, summary);
+  return summary;
+}
+
+async function supplierImageUrls(workspaceId: string, productId: string | null, sku: string, part: string) {
+  const db = getDb();
+  const feedOr = [
+    ...(productId ? [{ productId }] : []),
+    ...(sku ? [{ supplierSku: { equals: sku, mode: "insensitive" as const } }] : []),
+    ...(part ? [{ manufacturerPartNumber: { equals: part, mode: "insensitive" as const } }] : []),
+  ];
+  const [prices, feeds] = await Promise.all([
+    productId ? db.supplierPrice.findMany({ where: { workspaceId, productId }, select: { imageUrls: true } }) : Promise.resolve([]),
+    feedOr.length > 0 ? db.supplierFeedItem.findMany({ where: { workspaceId, OR: feedOr }, select: { imageUrls: true } }) : Promise.resolve([]),
+  ]);
+  return [...prices, ...feeds].flatMap((row) => row.imageUrls);
 }
 
 function viewWhere(view: string): Prisma.StoreCatalogueItemWhereInput {

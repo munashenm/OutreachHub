@@ -1,3 +1,4 @@
+import { imagesFromProductPage } from "../lib/automation";
 import {
   SEARCH_PROVIDER_DEPENDENCY,
   configuredSearchProvider,
@@ -139,6 +140,41 @@ async function searchWeb(provider: "brave" | "google" | "serpapi", query: string
   if (!response.ok) throw new Error(`The search provider returned ${response.status}.`);
   const payload = await response.json() as { organic_results?: Array<{ link?: string; title?: string }> };
   return (payload.organic_results ?? []).flatMap((hit) => hit.link ? [{ url: hit.link, title: hit.title ?? "" }] : []);
+}
+
+export async function verifiedProductImageUrls(input: { brand: string; sku: string; manufacturerPartNumber: string; pageUrl: string }) {
+  const identity = { brand: input.brand, manufacturerPartNumber: input.manufacturerPartNumber || input.sku };
+  const found: string[] = [];
+  const add = (urls: string[]) => {
+    for (const url of urls) {
+      if (!found.includes(url)) found.push(url);
+    }
+  };
+  if (input.pageUrl.startsWith("https://")) {
+    try {
+      add(imagesFromProductPage(await readPage(input.pageUrl), identity));
+    } catch {
+      // The stored page did not provide a verified image.
+    }
+  }
+  if (found.length > 0) return found.slice(0, 4);
+  const provider = configuredSearchProvider(process.env);
+  const query = [input.brand, input.manufacturerPartNumber || input.sku].map((part) => part.trim()).filter((part) => part.length >= 2).join(" ");
+  if (!provider || query.length < 3) return found;
+  try {
+    const pages = rankExternalUrls(await searchWeb(provider, query)).filter((page) => page.sourceType === "MANUFACTURER").slice(0, 2);
+    for (const page of pages) {
+      try {
+        add(imagesFromProductPage(await readPage(page.url), identity));
+      } catch {
+        continue;
+      }
+      if (found.length > 0) break;
+    }
+  } catch {
+    return found;
+  }
+  return found.slice(0, 4);
 }
 
 async function readPage(value: string) {

@@ -196,7 +196,6 @@ function NavIconSvg({ name }: { name: NavIcon }) {
     suppliers: "M3 7h13l5 5v7H3zM3 12h18",
     pipeline: "M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v6h-4z",
     templates: "M6 3h9l5 5v13H6zM15 3v5h5",
-    tasks: "M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01",
     analytics: "M4 19V9M10 19V5M16 19v-7M22 19H2",
     settings: "M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z",
   };

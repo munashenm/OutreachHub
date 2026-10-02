@@ -30,7 +30,7 @@ export default async function MailboxesPage({
     <div className="space-y-4">
       <PageHeader
         title="Mailboxes"
-        description="Connect the Urban Focus Google Workspace mailbox. Tokens stay encrypted on the server."
+        description="Connect the Urban Focus Google Workspace mailbox. Inbound mail and RFQs are read from that Google mailbox. Tokens stay encrypted on the server."
         actions={
           <div className="flex flex-wrap gap-2">
             {googleReady ? <a className={buttonPrimary} href="/api/google/connect">Connect Google Workspace</a> : null}

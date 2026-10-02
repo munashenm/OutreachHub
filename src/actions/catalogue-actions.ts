@@ -24,9 +24,9 @@ export async function readStoreCatalogueAction(): Promise<ActionState> {
 export async function reviewCatalogueItemAction(itemId: string, action: "accept" | "reject" | "ignore" | "image"): Promise<ActionState> {
   return runAction(async () => {
     const session = await requireSession();
-    await reviewCatalogueItem(session.workspace.id, itemId, action);
+    const summary = await reviewCatalogueItem(session.workspace.id, itemId, action);
     revalidatePath("/catalogue");
-    return { success: "Saved. The website was not changed." };
+    return { success: summary };
   });
 }
 

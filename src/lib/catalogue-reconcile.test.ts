@@ -4,6 +4,7 @@ import {
   analyseCatalogue,
   barcodeKey,
   brandModelKey,
+  catalogueDifference,
   matchStoreProduct,
   mpnKey,
   parseStoreCataloguePage,
@@ -191,6 +192,18 @@ test("uses a confirmed supplier sku mapping and ignores a fuzzy name match for m
     { skuKey: "SW-24", mpnKey: "", barcodeKey: "", brandModelKey: "" },
     { skuKey: "SW-24", mpnKey: "OTHER", barcodeKey: "", brandModelKey: "" },
   ), true);
+});
+
+test("compares supplier stock and the catalogue sell price with the website", () => {
+  const offer = { supplierName: "Frontosa", costCents: 800, stockQty: 4, sellCents: 1200 };
+  assert.deepEqual(catalogueDifference({ stockQuantity: 4, unitPriceCents: 1200 }, offer), {
+    compared: true,
+    stockDiffers: false,
+    priceDiffers: false,
+  });
+  assert.equal(catalogueDifference({ stockQuantity: 1, unitPriceCents: 900 }, offer).stockDiffers, true);
+  assert.equal(catalogueDifference({ stockQuantity: 4, unitPriceCents: 900 }, offer).priceDiffers, true);
+  assert.equal(catalogueDifference({ stockQuantity: 0, unitPriceCents: 0 }, null).compared, false);
 });
 
 test("recommends a review for duplicates and missing images", () => {

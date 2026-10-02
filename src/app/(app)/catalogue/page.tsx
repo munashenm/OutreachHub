@@ -19,6 +19,8 @@ const VIEWS = [
   ["review", "Needs review"],
   ["matched", "Matched"],
   ["ready", "Ready for supplier matching"],
+  ["stock-diff", "Stock differs"],
+  ["price-diff", "Price differs"],
 ] as const;
 
 export default async function CataloguePage({
@@ -44,7 +46,7 @@ export default async function CataloguePage({
         actions={<ReadCatalogueButton connected={Boolean(store?.connected)} />}
       />
       <Panel className="mb-4 p-4 text-sm text-muted">
-        <p>Update store and publish stay off until this report is reviewed. Find image marks a product for review and does not download a picture. Supplier catalogues are not imported yet, so stock and price differences against a supplier are not available.</p>
+        <p>This report compares the website with the supplier offer selected for each product. Stock is that offer&apos;s quantity. Price is the staff catalogue sell price, or the supplier cost plus its markup when no sell price is saved. Find image saves a verified https address on this copy. The website is not changed.</p>
         {report.running ? <p className="mt-2">A read is in progress: {report.running.imported.toLocaleString("en-GB")} of {(report.running.total ?? 0).toLocaleString("en-GB")} products.</p> : null}
         {report.scan?.finishedAt ? <p className="mt-2">Last read: {formatDateTime(report.scan.finishedAt)}. The website was not changed.</p> : null}
       </Panel>
@@ -64,9 +66,9 @@ export default async function CataloguePage({
             <div>Published: {stats.published}</div>
             <div>Unpublished: {stats.unpublished}</div>
             <div>Matched to a staff catalogue product: {stats.matchedToCatalogue}</div>
-            <div>New products created: 0</div>
-            <div>Stock differences: not compared yet</div>
-            <div>Price differences: not compared yet</div>
+            <div>New website products created by this read: 0</div>
+            <div>Stock differences: {report.differences?.stockDifferences ?? 0} of {report.differences?.compared ?? 0} compared</div>
+            <div>Price differences: {report.differences?.priceDifferences ?? 0} of {report.differences?.compared ?? 0} compared</div>
           </dl>
         </Panel>
       ) : null}
@@ -110,7 +112,18 @@ export default async function CataloguePage({
                       <p className="text-xs text-muted">{item.stockQuantity} in stock · {item.imageUrls.length} image{item.imageUrls.length === 1 ? "" : "s"}</p>
                       {item.url ? <a className="text-xs text-accent" href={item.url}>Website page</a> : null}
                     </td>
-                    <td className="text-sm text-muted">Not compared yet</td>
+                    <td className="text-sm">
+                      {item.comparison ? (
+                        <>
+                          <p>{item.comparison.supplierName}{item.comparison.costCents != null ? ` · cost ${formatCents(item.comparison.costCents, item.currency)}` : ""}</p>
+                          <p className="text-xs text-muted">
+                            Stock {item.comparison.stockQty ?? "unknown"}{item.comparison.stockDiffers ? " · differs from the website" : ""}
+                            {item.comparison.sellCents != null ? ` · sell ${formatCents(item.comparison.sellCents, item.currency)}` : ""}
+                            {item.comparison.priceDiffers ? " · differs from the website" : ""}
+                          </p>
+                        </>
+                      ) : <p className="text-muted">No supplier offer</p>}
+                    </td>
                     <td className="max-w-xs text-sm">{recommendedCatalogueAction({ duplicateKinds: item.duplicateKinds, skuKey: item.skuKey, mpnKey: item.mpnKey, imageCount: item.imageUrls.length, unitPriceCents: item.unitPriceCents })}</td>
                     <td><CatalogueReviewActions itemId={item.id} /></td>
                   </tr>
