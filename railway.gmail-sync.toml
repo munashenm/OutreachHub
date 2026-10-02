@@ -5,6 +5,6 @@
 buildCommand = "echo Gmail sync runner"
 
 [deploy]
-startCommand = "npm run cron:gmail-sync"
+startCommand = "node scripts/gmail-sync.mjs"
 cronSchedule = "*/15 * * * *"
 restartPolicyType = "NEVER"
