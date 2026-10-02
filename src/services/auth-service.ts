@@ -7,6 +7,9 @@ import { getDb, isUniqueViolation, type DbClient } from "../lib/db";
 import { AppError } from "../lib/errors";
 import { slugify } from "../lib/password";
 import { COOKIE_NAME, readSessionToken, signSessionToken } from "../lib/session-token";
+import { accessTokenForMailbox } from "./mailbox-service";
+import { sendGmailMessage } from "./google-service";
+import { sendMicrosoftMessage } from "./microsoft-service";
 
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7;
 
@@ -179,13 +182,36 @@ export async function requestPasswordReset(email: string) {
     },
   });
 
-  const devResetUrl = `${appUrl()}/reset-password?token=${token}`;
+  const resetUrl = `${appUrl()}/reset-password?token=${token}`;
   if (process.env.NODE_ENV !== "production") {
-    console.info(`Development password reset link: ${devResetUrl}`);
-    return { devResetUrl };
+    console.info(`Development password reset link: ${resetUrl}`);
+    return { devResetUrl: resetUrl };
   }
-  console.error("Password reset was requested, but outbound email is not configured.");
+  try {
+    await sendPasswordResetEmail(user.id, user.email, resetUrl);
+  } catch {
+    console.error("Password reset was requested, but the email could not be sent.");
+  }
   return {};
+}
+
+async function sendPasswordResetEmail(userId: string, to: string, resetUrl: string) {
+  const memberships = await getDb().membership.findMany({ where: { userId }, select: { workspaceId: true } });
+  if (memberships.length === 0) throw new Error("No mailbox is connected.");
+  const mailboxes = await getDb().mailbox.findMany({
+    where: { workspaceId: { in: memberships.map((membership) => membership.workspaceId) }, connectionStatus: "CONNECTED" },
+    select: { id: true, workspaceId: true, provider: true },
+  });
+  const mailbox = mailboxes.find((item) => item.provider === "GOOGLE") ?? mailboxes[0];
+  if (!mailbox) throw new Error("No mailbox is connected.");
+  const access = await accessTokenForMailbox(mailbox.id, mailbox.workspaceId);
+  const subject = "Reset your OutreachHub password";
+  const body = `Use this link to choose a new password. It expires in one hour.\n\n${resetUrl}\n\nIf you did not ask for this, you can ignore this email.`;
+  if (access.provider === "MICROSOFT") {
+    await sendMicrosoftMessage(access.token, { to, subject, body });
+    return;
+  }
+  await sendGmailMessage(access.token, { from: access.email, to, subject, body });
 }
 
 export async function resetPassword(token: string, password: string) {

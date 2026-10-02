@@ -15,7 +15,8 @@
     "postinstall": "prisma generate",
     "cron:gmail-sync": "node scripts/gmail-sync.mjs",
     "cron:send": "node scripts/send.mjs",
-    "cron:stock-sync": "node scripts/stock-sync.mjs"
+    "cron:stock-sync": "node scripts/stock-sync.mjs",
+    "cron:catalogue-read": "node scripts/catalogue-read.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

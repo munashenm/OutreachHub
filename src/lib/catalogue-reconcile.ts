@@ -193,6 +193,28 @@ export function recommendedCatalogueAction(item: { duplicateKinds: string; skuKe
   return "Ready for supplier matching. The website product stays as it is.";
 }
 
+export type CatalogueOfferView = {
+  supplierName: string;
+  costCents: number | null;
+  stockQty: number | null;
+  sellCents: number | null;
+};
+
+export function catalogueDifference(
+  store: { stockQuantity: number; unitPriceCents: number },
+  offer: CatalogueOfferView | null,
+) {
+  if (!offer) return { compared: false, stockDiffers: false, priceDiffers: false };
+  const hasStock = offer.stockQty != null;
+  const hasSell = offer.sellCents != null && offer.sellCents > 0;
+  if (!hasStock && !hasSell) return { compared: false, stockDiffers: false, priceDiffers: false };
+  return {
+    compared: true,
+    stockDiffers: hasStock && offer.stockQty !== Math.max(0, Math.floor(store.stockQuantity)),
+    priceDiffers: hasSell && offer.sellCents !== store.unitPriceCents,
+  };
+}
+
 export function matchStoreProduct(
   candidate: { storeProductId?: string; sku?: string; manufacturerPartNumber?: string; barcode?: string; brand?: string; name?: string; supplierSku?: string },
   items: readonly StoreIdentity[],

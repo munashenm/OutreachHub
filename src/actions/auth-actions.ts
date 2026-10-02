@@ -53,7 +53,7 @@ export async function forgotPasswordAction(_prev: ActionState, formData: FormDat
     if (!parsed.success) return { fieldErrors: fieldErrors(parsed.error) };
     const result = await requestPasswordReset(parsed.data.email);
     return {
-      success: "If an account exists for that email, a reset link has been prepared.",
+      success: "If an account exists for that email, a reset link has been sent.",
       devResetUrl: result.devResetUrl,
     };
   });
