@@ -10,7 +10,7 @@ import { replyTargets } from "@/lib/gmail-message";
 import type { RfqStatus } from "@/lib/labels";
 import { centsToInput } from "@/services/product-service";
 import { listProducts } from "@/services/product-service";
-import { quotesForRfq } from "@/services/quote-service";
+import { quoteApprovalLimits, quotesForRfq } from "@/services/quote-service";
 import { lowestCostsByProduct } from "@/services/supplier-service";
 import { reservedByProduct } from "@/services/stock-sync-service";
 import { stockLeft } from "@/lib/stock";
@@ -30,10 +30,11 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
   const { id } = await params;
   const rfq = await getRfq(session.workspace.id, id);
   if (!rfq) notFound();
-  const [thread, quotes, products] = await Promise.all([
+  const [thread, quotes, products, limits] = await Promise.all([
     getThread(session.workspace.id, rfq.sourceMessageId),
     quotesForRfq(session.workspace.id, rfq.id),
     listProducts(session.workspace.id),
+    quoteApprovalLimits(session.workspace.id),
   ]);
   const costs = await lowestCostsByProduct(session.workspace.id, products.map((product) => product.id));
   const reserved = await reservedByProduct(session.workspace.id);
@@ -102,6 +103,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
               quantity: Number(line.quantity).toString(),
               unitPriceCents: line.unitPriceCents,
               productId: line.productId,
+              costCents: line.productId ? costs.get(line.productId) ?? null : null,
               specifications: line.product?.specifications ?? "",
               imageUrls: line.product?.imageUrls ?? [],
             }))}
@@ -117,6 +119,8 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
             subject={rfq.subject}
             customerName={rfq.prospect ? fullName(rfq.prospect.firstName, rfq.prospect.lastName) : ""}
             companyName={rfq.company?.companyName ?? ""}
+            minimumMarginPercent={limits.minimumMarginPercent}
+            autoSendMarginPercent={limits.autoSendMarginPercent}
           />
         </div>
         {sentQuotes.length > 0 ? (

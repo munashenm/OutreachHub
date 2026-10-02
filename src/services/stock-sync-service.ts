@@ -3,7 +3,7 @@ import { getDb, isUniqueViolation, type DbClient } from "../lib/db";
 import { AppError } from "../lib/errors";
 import { acceptProductImage, newProductDecision, seoFromProduct } from "../lib/automation";
 import { matchStoreProduct, skuKey } from "../lib/catalogue-reconcile";
-import { assertPublicHttpsUrl, markedUpCents, priceAllowedByMargin, stockLeft } from "../lib/stock";
+import { assertPublicHttpsUrl, markedUpCents, priceAllowedByMargin, stockLeft, storePushErrorMessage } from "../lib/stock";
 import {
   chooseSupplierOffer,
   exclusiveCostCents,
@@ -334,7 +334,7 @@ export async function pushStoreStock(workspaceId: string) {
       data: { storeLastSyncAt: cursor, storeLastError: null },
     });
   } catch (error) {
-    const message = error instanceof AppError ? error.message : "The store did not accept the catalogue update.";
+    const message = storePushErrorMessage(error);
     await getDb().workspace.update({
       where: { id: loaded.workspace.id },
       data: { storeLastSyncAt: cursor, storeLastError: message.slice(0, 300) },

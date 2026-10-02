@@ -3,11 +3,11 @@
 import { useActionState, useState } from "react";
 import { addQuoteLineAction, removeQuoteLineAction, sendQuoteAction } from "@/actions/quote-actions";
 import { Field, buttonPrimary, buttonSecondary, inputClass, textAreaClass } from "@/components/ui";
-import { formatCents, formatQuoteEmail, lineTotalCents, quoteTotalCents } from "@/lib/quote";
-import { linesExceedingStock } from "@/lib/stock";
+import { formatCents, formatQuoteEmail, lineTotalCents, parseMoneyToCents, quoteTotalCents } from "@/lib/quote";
+import { linesExceedingStock, quoteMarginBlock, sellMarginPercent } from "@/lib/stock";
 import { initialActionState } from "@/lib/format";
 
-type Line = { id: string; description: string; quantity: string; unitPriceCents: number; productId: string | null; specifications: string; imageUrls: string[] };
+type Line = { id: string; description: string; quantity: string; unitPriceCents: number; productId: string | null; costCents: number | null; specifications: string; imageUrls: string[] };
 type ProductOption = { id: string; sku: string; name: string; unitPrice: string; unitPriceCents: number; costCents: number | null; stockLeft: number };
 
 export function QuotePanel({
@@ -20,6 +20,8 @@ export function QuotePanel({
   subject,
   customerName,
   companyName,
+  minimumMarginPercent,
+  autoSendMarginPercent,
 }: {
   rfqId: string;
   quoteId: string | null;
@@ -30,6 +32,8 @@ export function QuotePanel({
   subject: string;
   customerName: string;
   companyName: string;
+  minimumMarginPercent: number;
+  autoSendMarginPercent: number;
 }) {
   const [state, formAction, pending] = useActionState(addQuoteLineAction, initialActionState);
   const [productId, setProductId] = useState("");
@@ -43,6 +47,12 @@ export function QuotePanel({
   const [exportQuote, setExportQuote] = useState(false);
   const [references, setReferences] = useState("");
   const selected = products.find((item) => item.id === productId);
+  const typedCents = parseMoneyToCents(unitPrice);
+  const addBlock = selected && typedCents != null ? quoteMarginBlock(selected.costCents, typedCents, minimumMarginPercent) : null;
+  const heldLines = lines.flatMap((line) => {
+    const message = quoteMarginBlock(line.costCents, line.unitPriceCents, minimumMarginPercent);
+    return message ? [message] : [];
+  });
   const leftByProduct = new Map(products.map((product) => [product.id, product.stockLeft]));
   const shortProductIds = new Set(linesExceedingStock(
     lines.map((line) => ({ productId: line.productId, quantity: Number(line.quantity) })),
@@ -77,7 +87,10 @@ export function QuotePanel({
               const amount = lineTotalCents(Number(line.quantity), line.unitPriceCents);
               return (
                 <tr key={line.id}>
-                  <td>{line.description}</td>
+                  <td>
+                    <p>{line.description}</p>
+                    <MarginNote costCents={line.costCents} sellCents={line.unitPriceCents} minimumMarginPercent={minimumMarginPercent} autoSendMarginPercent={autoSendMarginPercent} />
+                  </td>
                   <td>{line.quantity}</td>
                   <td>{formatCents(line.unitPriceCents, currency)}</td>
                   <td>{amount === null ? "—" : formatCents(amount, currency)}</td>
@@ -125,6 +138,7 @@ export function QuotePanel({
               </select>
             </Field>
             {selected?.costCents != null ? <p className="text-sm text-muted md:col-span-2">Selected supplier cost {formatCents(selected.costCents, currency)}. The unit price stays the catalogue sell price until you change it.</p> : null}
+            {addBlock ? <p className="text-sm text-amber-900 md:col-span-2">{addBlock}</p> : null}
             <Field label="Description" name="description" error={state.fieldErrors?.description}>
               <input id="description" name="description" value={description} onChange={(event) => setDescription(event.target.value)} required className={inputClass} />
             </Field>
@@ -135,7 +149,7 @@ export function QuotePanel({
               <input id="unitPrice" name="unitPrice" value={unitPrice} onChange={(event) => setUnitPrice(event.target.value)} required className={inputClass} />
             </Field>
             {state.error ? <p className="text-sm text-red-700 md:col-span-2">{state.error}</p> : null}
-            <button className={buttonSecondary} disabled={pending}>{pending ? "Adding..." : "Add line"}</button>
+            <button className={buttonSecondary} disabled={pending || Boolean(addBlock)}>{pending ? "Adding..." : "Add line"}</button>
           </form>
           <form
             className="grid gap-3 md:grid-cols-2"
@@ -173,7 +187,7 @@ export function QuotePanel({
                 <textarea id="references" name="references" className={textAreaClass} value={references} onChange={(event) => setReferences(event.target.value)} placeholder="https://" />
               </Field>
             ) : <input type="hidden" name="references" value="" />}
-            <button className={buttonPrimary} disabled={sending || lines.length === 0}>{sending ? "Sending..." : "Send Quote"}</button>
+            <button className={buttonPrimary} disabled={sending || lines.length === 0 || heldLines.length > 0}>{sending ? "Sending..." : "Send Quote"}</button>
           </form>
           {quoteId && lines.length > 0 ? (
             <p className="flex flex-wrap gap-3 text-sm">
@@ -188,4 +202,15 @@ export function QuotePanel({
       )}
     </div>
   );
+}
+
+function MarginNote({ costCents, sellCents, minimumMarginPercent, autoSendMarginPercent }: { costCents: number | null; sellCents: number; minimumMarginPercent: number; autoSendMarginPercent: number }) {
+  if (costCents == null) return null;
+  const margin = sellMarginPercent(costCents, sellCents);
+  if (margin == null) return null;
+  const held = quoteMarginBlock(costCents, sellCents, minimumMarginPercent);
+  const text = held ?? (margin < autoSendMarginPercent
+    ? `Margin ${margin}%. A person approves this quotation before it is emailed.`
+    : `Margin ${margin}%.`);
+  return <p className={held ? "text-amber-900" : "text-muted"}>{text}</p>;
 }

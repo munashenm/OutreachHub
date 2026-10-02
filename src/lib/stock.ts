@@ -31,12 +31,41 @@ export function parseProductImageUrls(value: string) {
   return urls;
 }
 
+export function storeRequestShouldRetry(error: unknown) {
+  const cause = error && typeof error === "object" ? (error as { cause?: { code?: string; message?: string } }).cause : undefined;
+  const text = `${error instanceof Error ? error.message : ""} ${cause?.code ?? ""} ${cause?.message ?? ""}`;
+  return /UND_ERR_CONNECT_TIMEOUT|Connect Timeout|fetch failed/i.test(text);
+}
+
+export function storePushErrorMessage(error: unknown) {
+  if (error && typeof error === "object" && (error as { name?: string }).name === "AppError" && typeof (error as { message?: unknown }).message === "string") {
+    return (error as { message: string }).message;
+  }
+  const cause = error && typeof error === "object" ? (error as { cause?: unknown }).cause : undefined;
+  const causeMessage = cause && typeof cause === "object" && typeof (cause as { message?: unknown }).message === "string" ? (cause as { message: string }).message : "";
+  const message = error instanceof Error ? `${error.message} ${causeMessage}` : "";
+  if (/timeout|fetch failed|UND_ERR_CONNECT/i.test(message)) return "OutreachHub could not reach the Urban Focus website. The connection timed out.";
+  return "The store did not accept the catalogue update.";
+}
+
+export function sellMarginPercent(costCents: number, sellCents: number) {
+  if (!Number.isInteger(costCents) || costCents <= 0 || !Number.isInteger(sellCents) || sellCents <= 0) return null;
+  return Math.floor(((sellCents - costCents) * 100) / sellCents);
+}
+
 export function priceAllowedByMargin(costCents: number, sellCents: number, minimumMarginPercent: number) {
   if (!Number.isInteger(minimumMarginPercent) || minimumMarginPercent <= 0) return true;
   if (!Number.isInteger(costCents) || costCents <= 0) return true;
-  if (!Number.isInteger(sellCents) || sellCents <= 0) return false;
-  const margin = Math.floor(((sellCents - costCents) * 100) / sellCents);
+  const margin = sellMarginPercent(costCents, sellCents);
+  if (margin == null) return false;
   return margin >= minimumMarginPercent;
+}
+
+export function quoteMarginBlock(costCents: number | null, sellCents: number, minimumMarginPercent: number) {
+  if (costCents == null || priceAllowedByMargin(costCents, sellCents, minimumMarginPercent)) return null;
+  const margin = sellMarginPercent(costCents, sellCents);
+  const shown = margin == null ? "unknown" : `${margin}%`;
+  return `This price is a ${shown} margin. It stays off the quotation until it reaches the ${minimumMarginPercent}% minimum.`;
 }
 
 export function markedUpCents(costCents: number, markupPercent: number) {

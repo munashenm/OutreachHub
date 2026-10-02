@@ -2,6 +2,7 @@ import { Prisma } from "../generated/prisma/client";
 import { getDb } from "../lib/db";
 import { AppError } from "../lib/errors";
 import { parseMoneyToCents, parseQuantity, quoteValidUntil, snapshotQuoteLine } from "../lib/quote";
+import { quoteMarginBlock } from "../lib/stock";
 import { quoteCoverEmail, urbanFocusQuoteNumber } from "../lib/quotation-document";
 import { ownedByWorkspace } from "../lib/gmail-sync";
 import { recordActivity } from "./activity-service";
@@ -9,6 +10,7 @@ import { getRfq } from "./rfq-service";
 import { generateQuotePdf } from "./quotation-pdf-service";
 import { sendThreadReply } from "./reply-service";
 import { queueStockForWebsite } from "./stock-sync-service";
+import { lowestCostsByProduct } from "./supplier-service";
 import type { Actor } from "./types";
 
 export async function quotesForRfq(workspaceId: string, rfqId: string) {
@@ -32,6 +34,31 @@ async function draftQuote(workspaceId: string, rfqId: string) {
   });
 }
 
+export async function quoteApprovalLimits(workspaceId: string) {
+  const workspace = await getDb().workspace.findFirst({
+    where: { id: workspaceId },
+    select: { minimumMarginPercent: true, autoSendMarginPercent: true },
+  });
+  return {
+    minimumMarginPercent: workspace?.minimumMarginPercent ?? 0,
+    autoSendMarginPercent: workspace?.autoSendMarginPercent ?? 25,
+  };
+}
+
+async function assertQuoteMargins(workspaceId: string, lines: Array<{ productId: string | null; unitPriceCents: number }>) {
+  const productIds = lines.flatMap((line) => line.productId ? [line.productId] : []);
+  if (productIds.length === 0) return;
+  const [limits, costs] = await Promise.all([
+    quoteApprovalLimits(workspaceId),
+    lowestCostsByProduct(workspaceId, productIds),
+  ]);
+  for (const line of lines) {
+    if (!line.productId) continue;
+    const message = quoteMarginBlock(costs.get(line.productId) ?? null, line.unitPriceCents, limits.minimumMarginPercent);
+    if (message) throw new AppError(message);
+  }
+}
+
 export async function addQuoteLine(actor: Actor, input: { rfqId: string; productId: string; description: string; quantity: string; unitPrice: string }) {
   const rfq = await getRfq(actor.workspaceId, input.rfqId);
   if (!rfq) throw new AppError("RFQ not found.", 404, "NOT_FOUND");
@@ -48,6 +75,7 @@ export async function addQuoteLine(actor: Actor, input: { rfqId: string; product
     if (!product) throw new AppError("Product not found in this workspace.");
     productId = product.id;
   }
+  await assertQuoteMargins(actor.workspaceId, [{ productId, unitPriceCents }]);
   const quote = await draftQuote(actor.workspaceId, rfq.id);
   if (quote.status !== "DRAFT") throw new AppError("This quote has already been sent.");
   await getDb().quoteLine.create({
@@ -91,6 +119,7 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
     include: { lines: true },
   });
   if (!quote || quote.lines.length === 0) throw new AppError("Add at least one line before sending the quote.");
+  await assertQuoteMargins(actor.workspaceId, quote.lines.map((line) => ({ productId: line.productId, unitPriceCents: line.unitPriceCents })));
   const to = rfq.sourceMessage.fromEmail || rfq.prospect?.email;
   if (!to) throw new AppError("This enquiry has no customer email address.");
   const issuedAt = quote.issuedAt ?? new Date();
