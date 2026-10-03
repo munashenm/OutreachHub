@@ -91,6 +91,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
       <Panel className="p-5">
         <h2 className="font-semibold">Quote</h2>
         <p className="mt-1 text-sm text-muted">Lines are priced from the catalogue or typed in. The draft follows the current product specification and images. Sending uses the connected Gmail mailbox, stays in this thread, and keeps that copy on the quotation.</p>
+        {draft ? <p className="mt-2 text-sm">Confidence score: {draft.confidenceScore}</p> : null}
         <div className="mt-4">
           <QuotePanel
             rfqId={rfq.id}
@@ -130,7 +131,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
                 {quote.number != null && quote.issuedAt ? (
                   <Link className="hover:underline" href={`/quotes/${quote.id}`}>{formatQuoteNumber(quote.number, quote.issuedAt)}</Link>
                 ) : "Quotation"}
-                {" "}sent {quote.sentAt ? formatDateTime(quote.sentAt) : ""} · {quote.lines.length} lines
+                {" "}sent {quote.sentAt ? formatDateTime(quote.sentAt) : ""} · {quote.lines.length} lines · confidence {quote.confidenceScore}
                 {" "}· <a className="hover:underline" href={`/api/quotes/${quote.id}/pdf`}>View Sent PDF</a>
               </li>
             ))}

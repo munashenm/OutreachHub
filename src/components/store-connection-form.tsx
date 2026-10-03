@@ -12,6 +12,8 @@ export function StoreConnectionForm({
   minimumMarginPercent,
   autoQuoteMarginPercent,
   autoSendMarginPercent,
+  followUpAfterDays,
+  followUpLimit,
   connected,
 }: {
   storeName: string;
@@ -20,6 +22,8 @@ export function StoreConnectionForm({
   minimumMarginPercent: number;
   autoQuoteMarginPercent: number;
   autoSendMarginPercent: number;
+  followUpAfterDays: number;
+  followUpLimit: number;
   connected: boolean;
 }) {
   const [state, action, pending] = useActionState(saveStoreConnectionAction, initialActionState);
@@ -52,6 +56,12 @@ export function StoreConnectionForm({
         </Field>
         <Field label="Auto-send margin percent" name="autoSendMarginPercent">
           <input id="autoSendMarginPercent" name="autoSendMarginPercent" type="number" min={0} max={90} defaultValue={autoSendMarginPercent} required className={inputClass} />
+        </Field>
+        <Field label="Quote follow-up after days" name="followUpAfterDays">
+          <input id="followUpAfterDays" name="followUpAfterDays" type="number" min={1} max={30} defaultValue={followUpAfterDays} required className={inputClass} />
+        </Field>
+        <Field label="Quote follow-up limit" name="followUpLimit">
+          <input id="followUpLimit" name="followUpLimit" type="number" min={0} max={5} defaultValue={followUpLimit} required className={inputClass} />
         </Field>
         <button className={buttonSecondary} disabled={pending}>{pending ? "Saving..." : "Save store"}</button>
       </form>

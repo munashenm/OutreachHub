@@ -1,5 +1,6 @@
 import { syncConnectedGmail } from "@/services/gmail-sync-service";
 import { processInboundAutomation } from "@/services/rfq-automation-service";
+import { processQuoteFollowUps } from "@/services/sales-response-service";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -17,5 +18,11 @@ export async function POST(request: Request) {
   } catch (error) {
     automation = { error: error instanceof Error ? error.message : "RFQ automation failed." };
   }
-  return Response.json({ results, automation });
+  let followUp: unknown = null;
+  try {
+    followUp = await processQuoteFollowUps();
+  } catch (error) {
+    followUp = { error: error instanceof Error ? error.message : "Quotation follow-up failed." };
+  }
+  return Response.json({ results, automation, followUp });
 }

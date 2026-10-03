@@ -64,6 +64,8 @@ export default async function SettingsPage({
           minimumMarginPercent={store?.minimumMarginPercent ?? 0}
           autoQuoteMarginPercent={store?.autoQuoteMarginPercent ?? 15}
           autoSendMarginPercent={store?.autoSendMarginPercent ?? 25}
+          followUpAfterDays={store?.followUpAfterDays ?? 3}
+          followUpLimit={store?.followUpLimit ?? 2}
           connected={store?.connected ?? false}
         />
       </Panel>

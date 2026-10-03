@@ -2,13 +2,14 @@ import { Prisma } from "../generated/prisma/client";
 import { getDb } from "../lib/db";
 import { AppError } from "../lib/errors";
 import { parseMoneyToCents, parseQuantity, quoteValidUntil, snapshotQuoteLine } from "../lib/quote";
-import { quoteMarginBlock } from "../lib/stock";
+import { quoteMarginBlock, sellMarginPercent } from "../lib/stock";
 import { quoteCoverEmail, urbanFocusQuoteNumber } from "../lib/quotation-document";
 import { ownedByWorkspace } from "../lib/gmail-sync";
 import { recordActivity } from "./activity-service";
 import { getRfq } from "./rfq-service";
 import { generateQuotePdf } from "./quotation-pdf-service";
 import { sendThreadReply } from "./reply-service";
+import { recordFunnel, scheduleQuoteFollowUp } from "./sales-response-service";
 import { queueStockForWebsite } from "./stock-sync-service";
 import { lowestCostsByProduct } from "./supplier-service";
 import type { Actor } from "./types";
@@ -203,4 +204,17 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
     });
     await queueStockForWebsite(tx, actor.workspaceId, prepared.lines.map((line) => line.productId ?? ""));
   });
+  const sentAt = new Date();
+  await scheduleQuoteFollowUp(actor.workspaceId, prepared.id, sentAt);
+  const valueCents = prepared.lines.reduce((sum, line) => sum + line.unitPriceCents * Number(line.quantity), 0);
+  const productIds = prepared.lines.flatMap((line) => line.productId ? [line.productId] : []);
+  const costs = productIds.length === 0 ? new Map<string, number>() : await lowestCostsByProduct(actor.workspaceId, productIds);
+  const margins = prepared.lines.flatMap((line) => {
+    const cost = line.productId ? costs.get(line.productId) : undefined;
+    if (cost == null) return [];
+    const margin = sellMarginPercent(cost, line.unitPriceCents);
+    return margin == null ? [] : [margin];
+  });
+  const marginPercent = margins.length === 0 ? null : Math.round(margins.reduce((sum, margin) => sum + margin, 0) / margins.length);
+  await recordFunnel({ workspaceId: actor.workspaceId, rfqId: rfq.id, status: "QUOTE_SENT", valueCents: Math.round(valueCents), marginPercent });
 }
