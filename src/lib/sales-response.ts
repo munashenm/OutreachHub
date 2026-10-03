@@ -129,7 +129,8 @@ export function unpricedCatalogueNote(requirement: ProductRequirement, matches: 
   const specified = matches.filter((match) => match.method === "EXACT" || match.method === "SPECIFICATION");
   const exactSpec = specified.filter((match) => match.similarity >= 0.88);
   const chosen = exactSpec.find((match) => (match.stockQty ?? 0) > 0) ?? exactSpec[0] ?? specified.find((match) => (match.stockQty ?? 0) > 0) ?? specified[0]
-    ?? matches.find((match) => (match.method === "FUZZY" || match.method === "SEMANTIC") && family.length > 2 && match.name.toLowerCase().includes(family) && (match.stockQty ?? 0) > 0);
+    ?? matches.find((match) => (match.method === "FUZZY" || match.method === "SEMANTIC") && family.length > 2 && match.name.toLowerCase().includes(family) && (match.stockQty ?? 0) > 0)
+    ?? matches.find((match) => (match.method === "FUZZY" || match.method === "SEMANTIC") && family.length > 2 && match.name.toLowerCase().includes(family));
   if (!chosen?.name) return "";
   const sku = chosen.sku ? ` (${chosen.sku})` : "";
   return `${chosen.name}${sku} is on the website catalogue. No supplier cost is on file, so no price was offered.`;

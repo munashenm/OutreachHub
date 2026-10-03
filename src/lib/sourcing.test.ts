@@ -90,6 +90,29 @@ test("specification RFQ finds a model that meets the request", () => {
   assert.equal(plan.options.some((option) => option.name === "Basic laptop"), false);
 });
 
+test("a named laptop is not quoted as a larger unrelated product", () => {
+  const [requirement] = extractProductRequirements("Please quote 2 x Lenovo ThinkPad E14.");
+  const panel = candidate({
+    name: "Linkbasic 19-inch Rack Mount 1U Blank Panel",
+    brand: "",
+    model: "",
+    sku: "LB-BLANK-19",
+    mpn: "",
+    specifications: "19 inch",
+    costExVatCents: 8750,
+    stockQty: 384,
+    productId: "panel",
+  });
+  assert.equal(compareRequirement(requirement!, panel), "DOES_NOT_MEET");
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [panel] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "SOURCING");
+});
+
 test("existing named product is quoted from catalogue or supplier stock", () => {
   const [requirement] = extractProductRequirements("Please quote 2 x Lenovo ThinkPad E14.");
   assert.equal(requirement?.quantity, 2);
