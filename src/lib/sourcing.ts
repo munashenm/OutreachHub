@@ -1,6 +1,8 @@
 import { priceQuotation } from "./automation";
 
 export const CLARIFICATION_REPLY = "Thank you for your request. To prepare an accurate quotation, could you please confirm the required processor, RAM, storage configuration and operating system?";
+export const ATTACHMENT_CLARIFICATION = "The specification appears to be in an attachment. Please paste the required make, model or specification, and the quantity, into your reply so we can quote it.";
+export const QUANTITY_CLARIFICATION = "The specification is noted. Please confirm the quantity to quote.";
 export const SOURCING_REPLY = "Thank you. We have received your request and are sourcing the requested configuration. We will send the quotation once current availability and pricing have been confirmed.";
 
 export type SourceKind = "URBAN_FOCUS_CATALOGUE" | "SUPPLIER_FEED" | "SUPPLIER_API" | "EXTERNAL_SOURCE";
@@ -153,10 +155,27 @@ export function extractProductRequirements(body: string): ProductRequirement[] {
   return groups.map((group) => requirementFromText(group.join("\n"))).filter((item) => item.quantity != null || item.model || item.sku || item.productType);
 }
 
+export function requirementSummary(requirement: ProductRequirement) {
+  return [
+    requirement.brandPreference,
+    requirement.model || requirement.productType,
+    requirement.processor,
+    requirement.ramGb == null ? "" : `${requirement.ramGb}GB RAM`,
+    requirement.storageGb == null ? "" : `${requirement.storageGb}GB ${requirement.storageType}`.trim(),
+    requirement.screenInches == null ? "" : `${requirement.screenInches} inch`,
+    requirement.operatingSystem,
+  ].filter(Boolean).join(", ").slice(0, 300);
+}
+
 export function requirementIsVague(requirement: ProductRequirement) {
   if (requirement.sku || requirement.mpn || requirement.model) return false;
   const specified = [requirement.processor, requirement.ramGb, requirement.storageGb, requirement.operatingSystem, requirement.screenInches, requirement.graphics].filter((value) => value != null && value !== "").length;
   return specified < 2;
+}
+
+export function requirementAwaitingQuantity(requirement: ProductRequirement | undefined) {
+  if (!requirement || requirement.quantity != null || requirement.sku || requirement.mpn || requirement.model) return false;
+  return !requirementIsVague(requirement);
 }
 
 export function sourcingCacheKey(requirement: ProductRequirement) {
@@ -227,7 +246,10 @@ export function planSourcing(input: {
   if (input.requirements.length === 0) {
     return { kind: "SOURCING", message: SOURCING_REPLY, note: "The request did not state a quantity and a product or specification, so sourcing is still open." };
   }
-  if (input.requirements.some(requirementIsVague)) return { kind: "CLARIFICATION", message: CLARIFICATION_REPLY };
+  if (input.requirements.some(requirementIsVague)) {
+    const attached = input.requirements.some((requirement) => /\battach(?:ed|ment)\b/i.test(requirement.requestedText));
+    return { kind: "CLARIFICATION", message: attached ? ATTACHMENT_CLARIFICATION : CLARIFICATION_REPLY };
+  }
   const priced: PricedSource[] = [];
   for (const requirement of input.requirements) {
     const found = chooseSources(requirement, input.pools, now, freshnessMs, input);
@@ -407,20 +429,24 @@ function requirementFromText(text: string): ProductRequirement {
 
 function quantityFrom(text: string) {
   const stripped = stripSpecNumbers(text);
-  const digit = stripped.match(/\b(\d+)\b/);
-  if (digit) {
-    const quantity = Number(digit[1]);
-    if (Number.isInteger(quantity) && quantity > 0 && quantity <= 100000) return quantity;
-  }
-  const word = stripped.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|twenty)\b/i);
-  return word ? NUMBER_WORDS[word[1].toLowerCase()] ?? null : null;
+  const explicit = stripped.match(/\b(\d+)\s*[x×]\b/i) ?? stripped.match(/\b(?:quote|supply(?:\s+of)?|order(?:\s+of)?|need|qty|quantity)\s*[:#]?\s*(\d+)\b/i);
+  if (explicit?.[1]) return boundedQuantity(Number(explicit[1]));
+  const word = stripped.match(/\b(?:quote|supply|order|need|for)\s+(one|two|three|four|five|six|seven|eight|nine|ten|twenty)\b/i);
+  if (word?.[1]) return NUMBER_WORDS[word[1].toLowerCase()] ?? null;
+  return null;
+}
+
+function boundedQuantity(quantity: number) {
+  if (!Number.isInteger(quantity) || quantity <= 0 || quantity > 100000) return null;
+  return quantity;
 }
 
 function stripSpecNumbers(text: string) {
   return text
+    .replace(/\bcore\s+ultra\s+[3579]\b/gi, " ")
     .replace(/\bcore\s+i[3579](?:\s*-\s*\d{3,5}\w*)?/gi, " ")
-    .replace(/\b\d+\s*gb\s*(?:ram|memory)\b/gi, " ")
-    .replace(/\b\d+\s*(?:gb|tb)\s*(?:ssd|nvme|hdd)\b/gi, " ")
+    .replace(/\b\d+\s*gb(?:\s+ddr\d+)?\s*(?:ram|memory)\b/gi, " ")
+    .replace(/\b\d+\s*(?:gb|tb)(?:\s+pcie)?\s*(?:ssd|nvme|hdd)\b/gi, " ")
     .replace(/\b\d+(?:\.\d+)?\s*(?:-| )?\s*(?:inch|inches|")/gi, " ")
     .replace(/\bwindows\s+11(?:\s+(?:pro|home))?\b/gi, " ");
 }
@@ -435,14 +461,15 @@ type ParsedSpecs = {
 };
 
 function specsFromText(text: string): ParsedSpecs {
+  const ultra = text.match(/\bcore\s+ultra\s+([3579])\b/i);
   const core = text.match(/\bcore\s+i([3579])\b/i);
   const ryzen = text.match(/\bryzen\s+([3579])\b/i);
-  const ram = text.match(/\b(\d+)\s*gb\s*(?:ram|memory)\b/i);
-  const disk = text.match(/\b(\d+)\s*(gb|tb)\s*(ssd|nvme|hdd)\b/i);
+  const ram = text.match(/\b(\d+)\s*gb(?:\s+ddr\d+)?\s*(?:ram|memory)\b/i);
+  const disk = text.match(/\b(\d+)\s*(gb|tb)(?:\s+pcie)?\s*(ssd|nvme|hdd)\b/i);
   const screen = text.match(/\b(\d+(?:\.\d+)?)\s*(?:-| )?\s*(?:inch|inches|")/i);
   const storageGb = disk?.[1] ? (disk[2].toLowerCase() === "tb" ? Number(disk[1]) * 1024 : Number(disk[1])) : null;
   return {
-    processor: core ? `Core i${core[1]}` : ryzen ? `Ryzen ${ryzen[1]}` : "",
+    processor: ultra ? `Core Ultra ${ultra[1]}` : core ? `Core i${core[1]}` : ryzen ? `Ryzen ${ryzen[1]}` : "",
     ramGb: ram ? Number(ram[1]) : null,
     storageGb,
     storageType: disk?.[3] ? (disk[3].toLowerCase() === "hdd" ? "HDD" : "SSD") : "",
@@ -469,7 +496,14 @@ function identityMatches(requirement: ProductRequirement, candidate: SourcingCan
 function compareProcessor(required: string, offered: string): "MEETS" | "EXCEEDS" | "MISS" | "FAIL" | "SKIP" {
   if (!required) return "SKIP";
   if (!offered) return "MISS";
-  const rank = (value: string) => /i3/.test(value) ? 3 : /i5/.test(value) ? 5 : /i7/.test(value) ? 7 : /i9/.test(value) ? 9 : /ryzen\s*3/.test(value.toLowerCase()) ? 3 : /ryzen\s*5/.test(value.toLowerCase()) ? 5 : /ryzen\s*7/.test(value.toLowerCase()) ? 7 : 0;
+  const requiredUltra = /ultra/.test(required.toLowerCase());
+  const offeredUltra = /ultra/.test(offered.toLowerCase());
+  if (requiredUltra !== offeredUltra) return "FAIL";
+  const rank = (value: string) => {
+    const ultra = value.toLowerCase().match(/ultra\s*([3579])/);
+    if (ultra?.[1]) return 100 + Number(ultra[1]);
+    return /i3/.test(value) ? 3 : /i5/.test(value) ? 5 : /i7/.test(value) ? 7 : /i9/.test(value) ? 9 : /ryzen\s*3/.test(value.toLowerCase()) ? 3 : /ryzen\s*5/.test(value.toLowerCase()) ? 5 : /ryzen\s*7/.test(value.toLowerCase()) ? 7 : 0;
+  };
   const left = rank(required.toLowerCase());
   const right = rank(offered.toLowerCase());
   const sameFamily = required.toLowerCase().includes("ryzen") === offered.toLowerCase().includes("ryzen");

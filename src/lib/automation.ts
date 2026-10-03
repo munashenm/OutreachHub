@@ -77,6 +77,7 @@ export function isQuotationRequest(kind: InboundKind) {
 export function classifyInbound(input: { subject: string; body: string; campaignReply: boolean }): InboundKind {
   if (input.campaignReply) return "CAMPAIGN_REPLY";
   const text = `${input.subject}\n${input.body}`;
+  if (isBulkNotice(input.subject, input.body)) return "OTHER";
   const reply = classifyCustomerReply(text);
   if (reply === "QUOTE_ACCEPTED") return "QUOTE_ACCEPTED";
   if (reply === "PURCHASE_ORDER") return "ORDER_OR_PO";
@@ -87,6 +88,11 @@ export function classifyInbound(input: { subject: string; body: string; campaign
   if (/\b(price|pricing|how much|costing)\b/i.test(text)) return "PRICE_ENQUIRY";
   if (/\b(enquiry|inquire|information on)\b/i.test(text)) return "GENERAL_ENQUIRY";
   return "OTHER";
+}
+
+function isBulkNotice(subject: string, body: string) {
+  if (/\b(request for quotation|\brfq\b|please quote|kindly quote)\b/i.test(subject)) return false;
+  return /\bunsubscribe\b/i.test(body) || /view (?:it |this email )?in your browser/i.test(body) || /\blist-unsubscribe\b/i.test(body) || /\bno longer wish to receive\b/i.test(body);
 }
 
 export function classifyCustomerReply(text: string): ReplyKind {
@@ -483,12 +489,12 @@ function specificationChecks(text: string): SpecCheck[] {
   if (core?.[1]) add({ label: `Core i${core[1]}`, source: new RegExp(`\\bcore\\s+i${core[1]}\\b`, "i"), met: (haystack) => haystack.includes(`core i${core[1]}`) });
   const ryzen = text.match(/\bryzen\s+([3579])\b/i);
   if (ryzen?.[1]) add({ label: `Ryzen ${ryzen[1]}`, source: new RegExp(`\\bryzen\\s+${ryzen[1]}\\b`, "i"), met: (haystack) => haystack.includes(`ryzen ${ryzen[1]}`) });
-  const ram = text.match(/\b(\d+)\s*gb\s*ram\b/i);
+  const ram = text.match(/\b(\d+)\s*gb(?:\s+ddr\d+)?\s*ram\b/i);
   if (ram?.[1]) {
     const size = ram[1];
     add({ label: `${size}GB RAM`, source: new RegExp(`\\b${size}\\s*gb\\s*ram\\b`, "i"), met: (haystack) => new RegExp(`\\b${size} gb\\b`).test(haystack) && /\b(ram|memory)\b/.test(haystack) });
   }
-  const disk = text.match(/\b(\d+)\s*(gb|tb)\s*(ssd|nvme|hdd)\b/i);
+  const disk = text.match(/\b(\d+)\s*(gb|tb)(?:\s+pcie)?\s*(ssd|nvme|hdd)\b/i);
   if (disk?.[1] && disk[2] && disk[3]) {
     const size = disk[1];
     const unit = disk[2].toLowerCase();

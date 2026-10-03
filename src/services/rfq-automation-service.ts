@@ -24,7 +24,7 @@ import { recordActivity } from "./activity-service";
 import { extractQuotationFields } from "./ai-service";
 import { sendQuote } from "./quote-service";
 import { sendThreadReply } from "./reply-service";
-import { extractProductRequirements, planSourcing, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
+import { extractProductRequirements, planSourcing, QUANTITY_CLARIFICATION, requirementAwaitingQuantity, requirementSummary, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
 import { sourceExternalForRequirements } from "./external-sourcing-service";
 import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp } from "./sales-response-service";
 
@@ -227,14 +227,28 @@ async function createRfq(message: { id: string; workspaceId: string; subject: st
   }
 }
 
-async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }) {
+export async function rerunRfqSourcing(workspaceId: string, rfqId: string) {
+  const workspace = await getDb().workspace.findFirst({
+    where: { id: workspaceId },
+    select: { id: true, minimumMarginPercent: true, autoQuoteMarginPercent: true, autoSendMarginPercent: true },
+  });
+  if (!workspace) return;
+  await quoteRfq(rfqId, workspace, { notify: false });
+}
+
+async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }, options?: { notify?: boolean }) {
+  const notify = options?.notify !== false;
   const db = getDb();
   const rfq = await db.rfq.findFirst({
     where: { id: rfqId, workspaceId: workspace.id },
     include: { lines: true, quotes: true, sourceMessage: true },
   });
   if (!rfq || rfq.quotes.some((quote) => quote.status === "SENT")) return;
+  const replyToCustomer = async (message: string) => {
+    if (notify) await sendSourcingReply(rfq, message);
+  };
   const requirements = extractProductRequirements(`${rfq.sourceMessage?.subject ?? rfq.subject}\n${rfq.sourceMessage?.body || rfq.description}`);
+  await storeParsedRequirement(rfq, requirements[0], workspace.id);
   const margins = {
     minimumMarginPercent: workspace.minimumMarginPercent,
     autoQuoteMarginPercent: workspace.autoQuoteMarginPercent,
@@ -250,9 +264,12 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     }
     if (plan.kind === "SOURCING") plan = { ...plan, note: live.note };
   }
+  if (requirementAwaitingQuantity(requirements[0]) && plan.kind === "SOURCING") {
+    plan = { ...plan, message: QUANTITY_CLARIFICATION, note: "The specification was read. The quantity was not stated." };
+  }
   if (plan.kind === "CLARIFICATION") {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: plan.message } });
-    await sendSourcingReply(rfq, plan.message);
+    await replyToCustomer( plan.message);
     return;
   }
   const requirement = requirements[0];
@@ -261,19 +278,19 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     : null;
   if (plan.kind === "SOURCING" && sales?.action === "CLARIFY") {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: sales.message } });
-    await sendSourcingReply(rfq, sales.message);
+    await replyToCustomer( sales.message);
     return;
   }
-  if (plan.kind === "SOURCING" && sales?.action === "ALTERNATIVES") {
+  if (plan.kind === "SOURCING" && sales && (sales.action === "ALTERNATIVES" || sales.action === "PREPARE") && sales.matches.some((match) => (match.unitPriceCents ?? 0) > 0)) {
     await rememberAlternativeQuote(rfq, sales.matches, workspace.id, Math.max(1, requirement?.quantity ?? 1), sales.confidence);
-    await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: "The exact product is unavailable. Verified alternatives are waiting for approval." } });
-    await sendSourcingReply(rfq, sales.message);
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: sales.action === "ALTERNATIVES" ? "The exact product is unavailable. Verified alternatives are waiting for approval." : "A verified supplier price is waiting for approval." } });
+    if (sales.action === "ALTERNATIVES" && sales.message) await replyToCustomer( sales.message);
     return;
   }
   if (plan.kind === "SOURCING") {
     if (sales?.action === "EXTERNAL_TASK") await openSourcingTask(workspace.id, rfq.id, requirement?.requestedText || rfq.subject);
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "SOURCING", automationNote: plan.note } });
-    await sendSourcingReply(rfq, plan.message);
+    await replyToCustomer( plan.message);
     return;
   }
   if (plan.kind === "STAFF_REVIEW") {
@@ -319,12 +336,21 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     }
   }
   if (sales) await db.quote.update({ where: { id: draft.id }, data: { confidenceScore: sales.confidence } });
+  if (requirementAwaitingQuantity(requirements[0])) {
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: QUANTITY_CLARIFICATION } });
+    await replyToCustomer(QUANTITY_CLARIFICATION);
+    return;
+  }
   if (!plan.send || sales?.action !== "AUTO_SEND") {
     if (sales?.action === "CLARIFY" && sales.message) {
       await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: sales.message } });
-      await sendSourcingReply(rfq, sales.message);
+      await replyToCustomer( sales.message);
       return;
     }
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: plan.note } });
+    return;
+  }
+  if (!notify) {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: plan.note } });
     return;
   }
@@ -504,6 +530,30 @@ async function rememberAlternativeQuote(rfq: { id: string; lines: { id: string }
       where: { id: line.id },
       data: { productId: first.productId, sourcedName: first.name, matchStatus: "MATCHED", matchGrade: first.method, matchNote: "Closest available alternative." },
     });
+  }
+}
+
+async function storeParsedRequirement(rfq: { id: string; lines: { id: string; specifications: string }[] }, requirement: Parameters<typeof requirementSummary>[0] | undefined, workspaceId: string) {
+  const summary = requirement ? requirementSummary(requirement) : "";
+  if (!summary) return;
+  const db = getDb();
+  const line = rfq.lines[0];
+  if (!line) {
+    const created = await db.rfqLine.create({
+      data: {
+        workspaceId,
+        rfqId: rfq.id,
+        description: summary,
+        specifications: summary,
+        quantity: requirement?.quantity == null ? null : new Prisma.Decimal(requirement.quantity.toFixed(2)),
+      },
+    });
+    rfq.lines.unshift({ id: created.id, specifications: summary });
+    return;
+  }
+  if (!line.specifications.trim()) {
+    await db.rfqLine.update({ where: { id: line.id }, data: { specifications: summary } });
+    line.specifications = summary;
   }
 }
 
