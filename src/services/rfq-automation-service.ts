@@ -26,6 +26,7 @@ import { sendQuote } from "./quote-service";
 import { sendThreadReply } from "./reply-service";
 import { extractProductRequirements, planSourcing, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
 import { sourceExternalForRequirements } from "./external-sourcing-service";
+import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp } from "./sales-response-service";
 
 const BATCH = 15;
 
@@ -118,14 +119,20 @@ async function handleQuoteReply(message: { id: string; workspaceId: string; body
     include: { quotes: { where: { status: "SENT" }, include: { lines: { include: { product: true } } }, orderBy: { sentAt: "desc" }, take: 1 } },
   });
   if (!rfq) return;
+  await getDb().rfq.update({ where: { id: rfq.id }, data: { respondedAt: rfq.respondedAt ?? new Date() } });
+  await recordReplyStage(message.workspaceId, rfq.id);
+  await stopQuoteFollowUp(rfq.id, kind === "NOT_INTERESTED" ? "rejected" : kind === "PURCHASE_ORDER" || kind === "QUOTE_ACCEPTED" ? "ordered" : "customer replied");
   if (kind === "QUOTE_ACCEPTED" || kind === "PURCHASE_ORDER") {
     if (rfq.status !== "WON") {
       await db.rfq.update({ where: { id: rfq.id }, data: { status: "WON", automationNote: kind === "PURCHASE_ORDER" ? "Purchase order received. Credit terms were not changed." : "The customer accepted the quotation." } });
+      await recordFunnel({ workspaceId: message.workspaceId, rfqId: rfq.id, status: "WON" });
     }
   } else if (kind === "NOT_INTERESTED") {
-    if (rfq.status !== "LOST") await db.rfq.update({ where: { id: rfq.id }, data: { status: "LOST", automationNote: "The customer is not interested." } });
+    if (rfq.status !== "LOST") await db.rfq.update({ where: { id: rfq.id }, data: { status: "LOST", lostReason: "Customer declined", automationNote: "The customer is not interested." } });
+    await recordFunnel({ workspaceId: message.workspaceId, rfqId: rfq.id, status: "LOST", note: "Customer declined" });
   } else if (kind === "PRICE_NEGOTIATION" || kind === "ALTERNATIVE_REQUEST" || kind === "DELIVERY_QUESTION") {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEGOTIATION", automationNote: "A suggested reply needs approval. The price, substitute, and delivery terms were not changed." } });
+    await recordFunnel({ workspaceId: message.workspaceId, rfqId: rfq.id, status: "NEGOTIATION" });
   } else {
     const quote = rfq.quotes[0];
     const line = quote?.lines[0];
@@ -179,6 +186,14 @@ async function createRfq(message: { id: string; workspaceId: string; subject: st
         deliveryLocation: extracted.deliveryLocation,
         requiredDate: extracted.requiredDate,
         notes: [extracted.customerName, extracted.companyName].filter(Boolean).join(", "),
+        enquiryJson: enquiryFromRequest({
+          intent: classifyInbound({ subject: message.subject, body: message.body, campaignReply: false }),
+          customerName: extracted.customerName,
+          companyName: extracted.companyName,
+          email,
+          reference: extracted.reference,
+          requirements: extractProductRequirements(`${message.subject}\n${message.body}`),
+        }),
         lines: {
           create: extracted.lines.map((line) => ({
             workspaceId: message.workspaceId,
@@ -201,6 +216,8 @@ async function createRfq(message: { id: string; workspaceId: string; subject: st
       companyId: prospect?.companyId ?? null,
       summary: `Opened RFQ “${rfq.subject}” from inbound mail.`,
     });
+    await recordFunnel({ workspaceId: message.workspaceId, rfqId: rfq.id, status: "NEW" });
+    await recordFunnel({ workspaceId: message.workspaceId, rfqId: rfq.id, status: "REVIEWING" });
     return rfq;
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;
@@ -238,7 +255,23 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     await sendSourcingReply(rfq, plan.message);
     return;
   }
+  const requirement = requirements[0];
+  const sales = requirement
+    ? responseForRequirement(requirement, [...pools.catalogue, ...pools.supplierFeeds, ...pools.supplierApis], margins, plan.kind === "QUOTE" && plan.send)
+    : null;
+  if (plan.kind === "SOURCING" && sales?.action === "CLARIFY") {
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: sales.message } });
+    await sendSourcingReply(rfq, sales.message);
+    return;
+  }
+  if (plan.kind === "SOURCING" && sales?.action === "ALTERNATIVES") {
+    await rememberAlternativeQuote(rfq, sales.matches, workspace.id, Math.max(1, requirement?.quantity ?? 1), sales.confidence);
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: "The exact product is unavailable. Verified alternatives are waiting for approval." } });
+    await sendSourcingReply(rfq, sales.message);
+    return;
+  }
   if (plan.kind === "SOURCING") {
+    if (sales?.action === "EXTERNAL_TASK") await openSourcingTask(workspace.id, rfq.id, requirement?.requestedText || rfq.subject);
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "SOURCING", automationNote: plan.note } });
     await sendSourcingReply(rfq, plan.message);
     return;
@@ -265,7 +298,7 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   }
   let draft = rfq.quotes.find((quote) => quote.status === "DRAFT");
   if (!draft) {
-    draft = await db.quote.create({ data: { workspaceId: workspace.id, rfqId: rfq.id, notes: rfq.customerReference ? `Customer reference ${rfq.customerReference}` : "" } });
+    draft = await db.quote.create({ data: { workspaceId: workspace.id, rfqId: rfq.id, confidenceScore: sales?.confidence ?? 0, notes: rfq.customerReference ? `Customer reference ${rfq.customerReference}` : "" } });
     for (const [index, option] of plan.options.entries()) {
       await db.quoteLine.create({
         data: {
@@ -285,7 +318,13 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
       });
     }
   }
-  if (!plan.send) {
+  if (sales) await db.quote.update({ where: { id: draft.id }, data: { confidenceScore: sales.confidence } });
+  if (!plan.send || sales?.action !== "AUTO_SEND") {
+    if (sales?.action === "CLARIFY" && sales.message) {
+      await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: sales.message } });
+      await sendSourcingReply(rfq, sales.message);
+      return;
+    }
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: plan.note } });
     return;
   }
@@ -434,6 +473,38 @@ async function sourcingPools(workspaceId: string): Promise<SourcingPools> {
     reputable: offer.sourceType !== "OTHER",
   }));
   return { catalogue, supplierFeeds, supplierApis, external: externalCandidates };
+}
+
+async function rememberAlternativeQuote(rfq: { id: string; lines: { id: string }[]; quotes: { id: string; status: string }[] }, matches: { productId: string | null; name: string; sku: string; unitPriceCents: number | null; method: string }[], workspaceId: string, quantity: number, confidence: number) {
+  const db = getDb();
+  const usable = matches.filter((match) => match.unitPriceCents != null && match.unitPriceCents > 0);
+  if (usable.length === 0) return;
+  let draft = rfq.quotes.find((quote) => quote.status === "DRAFT");
+  if (!draft) draft = await db.quote.create({ data: { workspaceId, rfqId: rfq.id, confidenceScore: confidence, notes: "" } });
+  else await db.quote.update({ where: { id: draft.id }, data: { confidenceScore: confidence } });
+  for (const match of usable) {
+    await db.quoteLine.create({
+      data: {
+        workspaceId,
+        quoteId: draft.id,
+        productId: match.productId,
+        description: `Alternative: ${match.name}`,
+        sku: match.sku,
+        quantity: new Prisma.Decimal(quantity.toFixed(2)),
+        unitPriceCents: match.unitPriceCents ?? 0,
+        matchGrade: match.method,
+        costStatus: "VERIFIED",
+      },
+    });
+  }
+  const line = rfq.lines[0];
+  const first = usable[0];
+  if (line && first?.productId) {
+    await db.rfqLine.update({
+      where: { id: line.id },
+      data: { productId: first.productId, sourcedName: first.name, matchStatus: "MATCHED", matchGrade: first.method, matchNote: "Closest available alternative." },
+    });
+  }
 }
 
 async function sendSourcingReply(rfq: { workspaceId: string; sourceMessageId: string; subject: string; automationNote: string; sourceMessage: { fromEmail: string | null } }, message: string) {

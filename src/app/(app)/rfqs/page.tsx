@@ -10,7 +10,7 @@ export default async function RfqsPage() {
   const rfqs = await listRfqs(session.workspace.id);
   return (
     <div>
-      <PageHeader title="RFQs" description="Quotation requests created from customer email. Supplier matching and quote generation are not included yet." />
+      <PageHeader title="RFQs" description="Quotation requests created from customer email. Matching, pricing, and the reply use verified catalogue and supplier data." />
       <Panel>
         {rfqs.length === 0 ? (
           <div className="p-4"><EmptyState title="No RFQs yet" description="Open an inbound message and choose Create RFQ." /></div>

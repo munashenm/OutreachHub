@@ -164,6 +164,8 @@ model Workspace {
   autoSendMarginPercent  Int       @default(25)
   storeLastSyncAt        DateTime?
   storeLastError         String?
+  followUpAfterDays      Int       @default(3)
+  followUpLimit          Int       @default(2)
   quoteSettings          Json?
   createdAt           DateTime  @default(now())
   updatedAt DateTime @updatedAt
@@ -188,6 +190,8 @@ model Workspace {
   catalogueItems    StoreCatalogueItem[]
   catalogueAudits   CatalogueAudit[]
   externalOffers    ExternalSourceOffer[]
+  funnelEvents      SalesFunnelEvent[]
+  sourcingTasks     SourcingTask[]
 }
 
 model Membership {
@@ -458,6 +462,9 @@ model Rfq {
   requiredDate      String @default("")
   acknowledgementSentAt DateTime?
   automationNote    String @default("")
+  enquiryJson       Json?
+  lostReason        String    @default("")
+  respondedAt       DateTime?
   status          RfqStatus @default(NEW)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -468,6 +475,8 @@ model Rfq {
   sourceMessage Message   @relation(fields: [sourceMessageId], references: [id], onDelete: Cascade)
   quotes        Quote[]
   lines         RfqLine[]
+  funnelEvents  SalesFunnelEvent[]
+  sourcingTasks SourcingTask[]
 
   @@index([workspaceId, status])
   @@index([workspaceId, createdAt])
@@ -562,6 +571,10 @@ model Quote {
   references  String      @default("")
   pdf         Bytes?
   pdfFilename String      @default("")
+  confidenceScore Int     @default(0)
+  followUpCount   Int     @default(0)
+  nextFollowUpAt  DateTime?
+  followUpStoppedReason String @default("")
   sentAt      DateTime?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
@@ -866,4 +879,36 @@ model CatalogueAudit {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, createdAt])
+}
+
+model SalesFunnelEvent {
+  id          String   @id @default(cuid())
+  workspaceId String
+  rfqId       String?
+  stage       String
+  note        String   @default("")
+  valueCents  Int      @default(0)
+  marginPercent Int?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  rfq       Rfq?      @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, stage])
+  @@index([rfqId, stage])
+}
+
+model SourcingTask {
+  id          String   @id @default(cuid())
+  workspaceId String
+  rfqId       String
+  requirement String
+  status      String   @default("OPEN")
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  rfq       Rfq       @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+
+  @@unique([rfqId, requirement])
+  @@index([workspaceId, status])
 }

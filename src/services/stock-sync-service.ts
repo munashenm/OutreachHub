@@ -160,6 +160,8 @@ export async function getStoreConnection(workspaceId: string) {
       minimumMarginPercent: true,
       autoQuoteMarginPercent: true,
       autoSendMarginPercent: true,
+      followUpAfterDays: true,
+      followUpLimit: true,
       storeLastSyncAt: true,
       storeLastError: true,
     },
@@ -173,6 +175,8 @@ export async function getStoreConnection(workspaceId: string) {
   minimumMarginPercent: workspace.minimumMarginPercent,
     autoQuoteMarginPercent: workspace.autoQuoteMarginPercent,
     autoSendMarginPercent: workspace.autoSendMarginPercent,
+    followUpAfterDays: workspace.followUpAfterDays,
+    followUpLimit: workspace.followUpLimit,
     connected,
     status: !connected ? "Not connected" : workspace.storeLastError ? "Error" : "Connected",
     lastSyncAt: workspace.storeLastSyncAt,
@@ -188,6 +192,8 @@ export async function saveStoreConnection(actor: Actor, input: {
   minimumMarginPercent: number;
   autoQuoteMarginPercent: number;
   autoSendMarginPercent: number;
+  followUpAfterDays: number;
+  followUpLimit: number;
 }) {
   const workspace = await getDb().workspace.findFirst({
     where: { id: actor.workspaceId },
@@ -216,6 +222,8 @@ export async function saveStoreConnection(actor: Actor, input: {
       minimumMarginPercent: input.minimumMarginPercent,
       autoQuoteMarginPercent: input.autoQuoteMarginPercent,
       autoSendMarginPercent: input.autoSendMarginPercent,
+      followUpAfterDays: input.followUpAfterDays,
+      followUpLimit: input.followUpLimit,
       storeLastError: null,
     },
   });

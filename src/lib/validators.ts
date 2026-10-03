@@ -224,6 +224,8 @@ export const storeConnectionSchema = z.object({
   minimumMarginPercent: z.coerce.number().int().min(0).max(90),
   autoQuoteMarginPercent: z.coerce.number().int().min(0).max(90),
   autoSendMarginPercent: z.coerce.number().int().min(0).max(90),
+  followUpAfterDays: z.coerce.number().int().min(1).max(30),
+  followUpLimit: z.coerce.number().int().min(0).max(5),
 });
 
 export const supplierSchema = z.object({
