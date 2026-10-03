@@ -21,6 +21,7 @@ const VIEWS = [
   ["ready", "Ready for supplier matching"],
   ["stock-diff", "Stock differs"],
   ["price-diff", "Price differs"],
+  ["unpublished", "Unpublished"],
 ] as const;
 
 export default async function CataloguePage({

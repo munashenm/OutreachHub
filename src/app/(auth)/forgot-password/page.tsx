@@ -6,7 +6,7 @@ export default function ForgotPasswordPage() {
     <div>
       <h1 className="text-2xl font-semibold">Reset password</h1>
       <p className="mt-1 text-sm leading-6 text-muted">
-        Email delivery is not connected in this release. In local development, the reset link is shown after you submit.
+        We email a one-hour reset link from the connected mailbox. The password stays the same until you submit a new one.
       </p>
       <div className="mt-6">
         <ForgotPasswordForm />

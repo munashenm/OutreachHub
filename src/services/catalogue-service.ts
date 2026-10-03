@@ -645,6 +645,7 @@ function viewWhere(view: string): Prisma.StoreCatalogueItemWhereInput {
   if (view === "price") return { unitPriceCents: 0 };
   if (view === "stock") return { stockQuantity: 0 };
   if (view === "review") return { reviewStatus: { in: ["MATCH_REVIEW_REQUIRED", "IMAGE_REVIEW_REQUIRED"] } };
+  if (view === "unpublished") return { published: false };
   if (view === "matched") return { productId: { not: null } };
   if (view === "ready") {
     return { duplicateKinds: "", OR: [{ skuKey: { not: "" } }, { mpnKey: { not: "" } }, { barcodeKey: { not: "" } }] };

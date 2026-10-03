@@ -51,9 +51,9 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
         <p className="md:col-span-2"><span className="text-muted">Original enquiry: </span><Link className="hover:underline" href={`/inbox/${rfq.sourceMessageId}`}>{rfq.sourceMessage.subject}</Link></p>
         {rfq.automationNote ? <p className="md:col-span-2"><span className="text-muted">Automation: </span>{rfq.automationNote}</p> : null}
       </Panel>
-      {rfq.lines.length > 0 ? (
-        <Panel className="p-5">
+      <Panel className="p-5">
           <h2 className="font-semibold">Sourcing</h2>
+          {rfq.lines.length === 0 ? <p className="mt-3 text-sm text-muted">No specification line yet. Search again reads the original enquiry and does not send an email.</p> : (
           <ul className="mt-3 space-y-4 text-sm">
             {rfq.lines.map((line) => (
               <li key={line.id} className="grid gap-1">
@@ -67,6 +67,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
               </li>
             ))}
           </ul>
+          )}
           {draft && draft.lines.length > 0 ? (
             <div className="mt-4 space-y-1 text-sm">
               {draft.lines.map((line) => (
@@ -80,7 +81,6 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
             <button className={buttonSecondary}>Search again</button>
           </form>
         </Panel>
-      ) : null}
       <Panel className="p-5">
         <h2 className="font-semibold">Conversation</h2>
         <div className="mt-4 space-y-4">
