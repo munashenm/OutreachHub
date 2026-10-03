@@ -104,6 +104,10 @@ export function rankProductMatches(requirement: ProductRequirement, candidates: 
         method = "SEMANTIC";
         similarity = semantic;
       }
+      if (method === "NONE" && /\bthinkpad\b/i.test(`${requirement.model} ${requirement.requestedText}`) && /\bthinkpad\b/i.test(candidate.name)) {
+        method = "FUZZY";
+        similarity = Math.max(fuzzy, 0.56);
+      }
       return {
         productId: candidate.productId,
         name: candidate.name,
@@ -117,6 +121,17 @@ export function rankProductMatches(requirement: ProductRequirement, candidates: 
     })
     .filter((match) => match.method !== "NONE")
     .sort((left, right) => methodRank(left.method) - methodRank(right.method) || right.similarity - left.similarity);
+}
+
+export function unpricedCatalogueNote(requirement: ProductRequirement, matches: readonly RankedProduct[]) {
+  if (matches.some((match) => (match.unitPriceCents ?? 0) > 0)) return "";
+  const family = requirement.model.toLowerCase().split(/\s+/)[0] ?? "";
+  const specified = matches.filter((match) => match.method === "EXACT" || match.method === "SPECIFICATION");
+  const chosen = specified.find((match) => (match.stockQty ?? 0) > 0) ?? specified[0]
+    ?? matches.find((match) => (match.method === "FUZZY" || match.method === "SEMANTIC") && family.length > 2 && match.name.toLowerCase().includes(family) && (match.stockQty ?? 0) > 0);
+  if (!chosen?.name) return "";
+  const sku = chosen.sku ? ` (${chosen.sku})` : "";
+  return `${chosen.name}${sku} is on the website catalogue. No supplier cost is on file, so no price was offered.`;
 }
 
 export function confidenceFor(match: RankedProduct, requestedQuantity: number) {

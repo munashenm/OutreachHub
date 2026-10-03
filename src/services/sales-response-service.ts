@@ -7,12 +7,15 @@ import {
   funnelStage,
   quoteFollowUpAction,
   rankProductMatches,
+  unpricedCatalogueNote,
   salesFunnelMetrics,
   type FunnelStage,
   type RankedProduct,
 } from "../lib/sales-response";
 import type { ProductRequirement, SourcingCandidate } from "../lib/sourcing";
 import { sendThreadReply } from "./reply-service";
+
+export { unpricedCatalogueNote };
 
 type Margins = { minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number };
 

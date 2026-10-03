@@ -9,6 +9,7 @@ import {
   quoteFollowUpAction,
   rankProductMatches,
   salesFunnelMetrics,
+  unpricedCatalogueNote,
 } from "./sales-response";
 
 function candidate(patch: Partial<SourcingCandidate>): SourcingCandidate {
@@ -138,4 +139,22 @@ test("a reply without a verified price does not state a price", () => {
   const text = composeSalesReply({ action: "PREPARE", customerName: "Ada", lines: [], validUntil: "" });
   assert.match(text, /brand, model or SKU/);
   assert.equal(text.includes("ZAR"), false);
+});
+
+test("a website ThinkPad without a supplier cost is named and not priced", () => {
+  const requirement = emptyRequirement("2 x Lenovo ThinkPad E14");
+  requirement.model = "ThinkPad E14";
+  requirement.productType = "Laptop";
+  const matches = rankProductMatches(requirement, [candidate({
+    name: "Lenovo ThinkPad T14 Gen 6 Intel Core Ultra 7 16GB 512GB Win 11 Pro",
+    sku: "21QC000YZA",
+    model: "21QC000YZA",
+    stockQty: 2,
+    stockKnown: true,
+    costExVatCents: null,
+  })]);
+  const note = unpricedCatalogueNote(requirement, matches);
+  assert.match(note, /21QC000YZA/);
+  assert.match(note, /No supplier cost is on file/);
+  assert.equal(note.includes("ZAR"), false);
 });
