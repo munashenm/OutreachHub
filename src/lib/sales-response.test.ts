@@ -158,3 +158,33 @@ test("a website ThinkPad without a supplier cost is named and not priced", () =>
   assert.match(note, /No supplier cost is on file/);
   assert.equal(note.includes("ZAR"), false);
 });
+
+test("an exact website specification is named ahead of a higher one", () => {
+  const requirement = emptyRequirement("laptop specification");
+  requirement.productType = "Laptop";
+  requirement.processor = "Core Ultra 7";
+  requirement.ramGb = 16;
+  requirement.storageGb = 512;
+  requirement.storageType = "SSD";
+  requirement.screenInches = 14;
+  requirement.operatingSystem = "Windows 11 Pro";
+  const matches = rankProductMatches(requirement, [
+    candidate({
+      name: "ASUS Zenbook Duo Intel Core Ultra 9 16GB 512GB SSD Windows 11 Pro 14 inch",
+      sku: "UX8406",
+      model: "",
+      specifications: "Core Ultra 9, 16GB RAM, 512GB SSD, Windows 11 Pro, 14 inch",
+      stockQty: 3,
+      costExVatCents: null,
+    }),
+    candidate({
+      name: "Lenovo ThinkPad T14 Gen 6 Intel Core Ultra 7 16GB 512GB Win 11 Pro",
+      sku: "21QC000YZA",
+      model: "21QC000YZA",
+      specifications: "Core Ultra 7, 16GB RAM, 512GB SSD, Windows 11 Pro, 14 inch",
+      stockQty: 2,
+      costExVatCents: null,
+    }),
+  ]);
+  assert.match(unpricedCatalogueNote(requirement, matches), /21QC000YZA/);
+});

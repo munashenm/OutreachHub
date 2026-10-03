@@ -96,7 +96,7 @@ export function rankProductMatches(requirement: ProductRequirement, candidates: 
         similarity = 1;
       } else if (grade === "EXACT" || grade === "MEETS_REQUIREMENT" || grade === "EXCEEDS_REQUIREMENT") {
         method = "SPECIFICATION";
-        similarity = grade === "EXACT" ? 0.95 : 0.8;
+        similarity = grade === "EXACT" ? 0.95 : grade === "MEETS_REQUIREMENT" ? 0.88 : 0.8;
       } else if (fuzzy >= 0.55) {
         method = "FUZZY";
         similarity = fuzzy;
@@ -127,7 +127,8 @@ export function unpricedCatalogueNote(requirement: ProductRequirement, matches: 
   if (matches.some((match) => (match.unitPriceCents ?? 0) > 0)) return "";
   const family = requirement.model.toLowerCase().split(/\s+/)[0] ?? "";
   const specified = matches.filter((match) => match.method === "EXACT" || match.method === "SPECIFICATION");
-  const chosen = specified.find((match) => (match.stockQty ?? 0) > 0) ?? specified[0]
+  const exactSpec = specified.filter((match) => match.similarity >= 0.88);
+  const chosen = exactSpec.find((match) => (match.stockQty ?? 0) > 0) ?? exactSpec[0] ?? specified.find((match) => (match.stockQty ?? 0) > 0) ?? specified[0]
     ?? matches.find((match) => (match.method === "FUZZY" || match.method === "SEMANTIC") && family.length > 2 && match.name.toLowerCase().includes(family) && (match.stockQty ?? 0) > 0);
   if (!chosen?.name) return "";
   const sku = chosen.sku ? ` (${chosen.sku})` : "";
