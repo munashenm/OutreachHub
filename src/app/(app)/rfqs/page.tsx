@@ -21,7 +21,7 @@ export default async function RfqsPage() {
               {rfqs.map((rfq) => (
                 <tr key={rfq.id}>
                   <td><Link className="font-medium hover:underline" href={`/rfqs/${rfq.id}`}>{rfq.subject}</Link></td>
-                  <td>{rfq.prospect ? fullName(rfq.prospect.firstName, rfq.prospect.lastName) : "—"}</td>
+                  <td>{rfq.prospect ? fullName(rfq.prospect.firstName, rfq.prospect.lastName) : rfq.sourceMessage.fromName || rfq.sourceMessage.fromEmail || "—"}</td>
                   <td>{rfq.company?.companyName ?? "—"}</td>
                   <td>{RFQ_STATUS_LABELS[rfq.status as RfqStatus]}</td>
                   <td>{formatDateTime(rfq.createdAt)}</td>

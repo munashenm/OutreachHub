@@ -6,7 +6,17 @@ import { isRfqStatus } from "@/lib/labels";
 import { runAction } from "@/lib/run-action";
 import { readForm } from "@/lib/validators";
 import { requireSession } from "@/services/auth-service";
+import { rerunRfqSourcing } from "@/services/rfq-automation-service";
 import { updateRfq } from "@/services/rfq-service";
+
+export async function rerunRfqAction(formData: FormData) {
+  const session = await requireSession();
+  const id = String(formData.get("id") ?? "");
+  await rerunRfqSourcing(session.workspace.id, id);
+  revalidatePath(`/rfqs/${id}`);
+  revalidatePath("/rfqs");
+  revalidatePath("/analytics");
+}
 
 export async function updateRfqAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   return runAction(async () => {

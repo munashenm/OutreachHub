@@ -38,6 +38,7 @@ test("classifies a quotation request and ignores an outbound campaign reply", ()
   const body = "Please quote on 2 x HP laptop model D11G8ET";
   assert.equal(classifyInbound({ subject: "Quotation", body, campaignReply: false }), "RFQ");
   assert.equal(classifyInbound({ subject: "Re: newsletter", body: "Thanks", campaignReply: true }), "CAMPAIGN_REPLY");
+  assert.equal(classifyInbound({ subject: "Your transaction history", body: "Prices changed. Unsubscribe from these emails.", campaignReply: false }), "OTHER");
   assert.equal(classifyCustomerReply("We accept the quotation"), "QUOTE_ACCEPTED");
   assert.equal(classifyCustomerReply("Can you do a better price?"), "PRICE_NEGOTIATION");
 });

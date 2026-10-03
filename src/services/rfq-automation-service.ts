@@ -227,13 +227,26 @@ async function createRfq(message: { id: string; workspaceId: string; subject: st
   }
 }
 
-async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }) {
+export async function rerunRfqSourcing(workspaceId: string, rfqId: string) {
+  const workspace = await getDb().workspace.findFirst({
+    where: { id: workspaceId },
+    select: { id: true, minimumMarginPercent: true, autoQuoteMarginPercent: true, autoSendMarginPercent: true },
+  });
+  if (!workspace) return;
+  await quoteRfq(rfqId, workspace, { notify: false });
+}
+
+async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }, options?: { notify?: boolean }) {
+  const notify = options?.notify !== false;
   const db = getDb();
   const rfq = await db.rfq.findFirst({
     where: { id: rfqId, workspaceId: workspace.id },
     include: { lines: true, quotes: true, sourceMessage: true },
   });
   if (!rfq || rfq.quotes.some((quote) => quote.status === "SENT")) return;
+  const replyToCustomer = async (message: string) => {
+    if (notify) await sendSourcingReply(rfq, message);
+  };
   const requirements = extractProductRequirements(`${rfq.sourceMessage?.subject ?? rfq.subject}\n${rfq.sourceMessage?.body || rfq.description}`);
   const margins = {
     minimumMarginPercent: workspace.minimumMarginPercent,
@@ -252,7 +265,7 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   }
   if (plan.kind === "CLARIFICATION") {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: plan.message } });
-    await sendSourcingReply(rfq, plan.message);
+    await replyToCustomer( plan.message);
     return;
   }
   const requirement = requirements[0];
@@ -261,19 +274,19 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     : null;
   if (plan.kind === "SOURCING" && sales?.action === "CLARIFY") {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: sales.message } });
-    await sendSourcingReply(rfq, sales.message);
+    await replyToCustomer( sales.message);
     return;
   }
   if (plan.kind === "SOURCING" && sales?.action === "ALTERNATIVES") {
     await rememberAlternativeQuote(rfq, sales.matches, workspace.id, Math.max(1, requirement?.quantity ?? 1), sales.confidence);
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: "The exact product is unavailable. Verified alternatives are waiting for approval." } });
-    await sendSourcingReply(rfq, sales.message);
+    await replyToCustomer( sales.message);
     return;
   }
   if (plan.kind === "SOURCING") {
     if (sales?.action === "EXTERNAL_TASK") await openSourcingTask(workspace.id, rfq.id, requirement?.requestedText || rfq.subject);
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "SOURCING", automationNote: plan.note } });
-    await sendSourcingReply(rfq, plan.message);
+    await replyToCustomer( plan.message);
     return;
   }
   if (plan.kind === "STAFF_REVIEW") {
@@ -322,9 +335,13 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   if (!plan.send || sales?.action !== "AUTO_SEND") {
     if (sales?.action === "CLARIFY" && sales.message) {
       await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: sales.message } });
-      await sendSourcingReply(rfq, sales.message);
+      await replyToCustomer( sales.message);
       return;
     }
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: plan.note } });
+    return;
+  }
+  if (!notify) {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: plan.note } });
     return;
   }

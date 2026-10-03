@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ATTACHMENT_CLARIFICATION,
   CLARIFICATION_REPLY,
   compareRequirement,
   exclusiveFromListed,
@@ -221,4 +222,26 @@ test("external retail price is converted once and held for approval", () => {
   assert.notEqual(plan.options[0]?.unitPriceCents, 1_000_000);
   assert.equal(plan.options[0]?.costStatus, "NEEDS_REVIEW");
   assert.ok((plan.options[0]?.unitPriceCents ?? 0) > landed);
+});
+
+test("a tender specification across bullet lines is read without using the tender number as the quantity", () => {
+  const [requirement] = extractProductRequirements(`URGENT RFQ – ECPT Tender SCMU12-26/27-0003
+The required laptop configuration includes:
+Windows 11 Pro 64-bit
+Intel Core Ultra 7 155H
+16GB DDR5 RAM
+512GB PCIe NVMe SSD
+14-inch touchscreen display`);
+  assert.equal(requirement?.quantity, null);
+  assert.equal(requirement?.processor, "Core Ultra 7");
+  assert.equal(requirement?.ramGb, 16);
+  assert.equal(requirement?.storageGb, 512);
+  assert.equal(requirement?.storageType, "SSD");
+  assert.equal(requirement?.operatingSystem, "Windows 11 Pro");
+  assert.equal(requirement?.screenInches, 14);
+  const attached = extractProductRequirements("Please quote 4 business laptops. The specification is attached.")[0];
+  const plan = planSourcing({ requirements: attached ? [attached] : [], pools: emptyPools(), ...margins, now });
+  assert.equal(plan.kind, "CLARIFICATION");
+  if (plan.kind !== "CLARIFICATION") return;
+  assert.equal(plan.message, ATTACHMENT_CLARIFICATION);
 });

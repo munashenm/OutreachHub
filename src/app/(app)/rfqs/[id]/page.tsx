@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { ReplyForm } from "@/components/inbox-actions";
 import { RfqStatusForm } from "@/components/rfq-status-form";
 import { QuotePanel } from "@/components/quote-panel";
-import { PageHeader, Panel } from "@/components/ui";
+import { rerunRfqAction } from "@/actions/rfq-actions";
+import { PageHeader, Panel, buttonSecondary } from "@/components/ui";
 import { formatDateTime, fullName } from "@/lib/format";
 import { formatCents, formatQuoteNumber } from "@/lib/quote";
 import { replyTargets } from "@/lib/gmail-message";
@@ -45,7 +46,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
     <div className="space-y-4">
       <PageHeader title={rfq.subject} description={`Created ${formatDateTime(rfq.createdAt)}`} actions={<Link href="/rfqs" className="text-sm text-accent">Back to RFQs</Link>} />
       <Panel className="grid gap-3 p-5 text-sm md:grid-cols-2">
-        <p><span className="text-muted">Customer: </span>{rfq.prospect ? <Link className="hover:underline" href={`/prospects/${rfq.prospect.id}`}>{fullName(rfq.prospect.firstName, rfq.prospect.lastName)}</Link> : "Unknown sender"}</p>
+        <p><span className="text-muted">Customer: </span>{rfq.prospect ? <Link className="hover:underline" href={`/prospects/${rfq.prospect.id}`}>{fullName(rfq.prospect.firstName, rfq.prospect.lastName)}</Link> : rfq.sourceMessage.fromName || rfq.sourceMessage.fromEmail || "Unknown sender"}</p>
         <p><span className="text-muted">Company: </span>{rfq.company ? <Link className="hover:underline" href={`/companies/${rfq.company.id}`}>{rfq.company.companyName}</Link> : "—"}</p>
         <p className="md:col-span-2"><span className="text-muted">Original enquiry: </span><Link className="hover:underline" href={`/inbox/${rfq.sourceMessageId}`}>{rfq.sourceMessage.subject}</Link></p>
         {rfq.automationNote ? <p className="md:col-span-2"><span className="text-muted">Automation: </span>{rfq.automationNote}</p> : null}
@@ -73,7 +74,11 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
               ))}
             </div>
           ) : <p className="mt-4 text-sm"><span className="text-muted">Sell price: </span>Not priced yet</p>}
-          <p className="mt-4 text-sm text-muted">Send Quote approves the priced option. Ask Customer uses the reply box when a detail is still missing. Search Again runs on the next mail sync after a supplier or external source is updated. Manual Source is a line added on the quotation.</p>
+          <p className="mt-4 text-sm text-muted">Send Quote approves the priced option. Ask Customer uses the reply box when a detail is still missing. Search again checks the catalogue and supplier products and does not send another email. Manual Source is a line added on the quotation.</p>
+          <form action={rerunRfqAction} className="mt-3">
+            <input type="hidden" name="id" value={rfq.id} />
+            <button className={buttonSecondary}>Search again</button>
+          </form>
         </Panel>
       ) : null}
       <Panel className="p-5">
