@@ -270,6 +270,23 @@ export function salesFunnelMetrics(rows: Array<{ stage: FunnelStage; valueCents:
   };
 }
 
+export function funnelRowsFromRfqs(rfqs: Array<{ status: string; createdAt: string; respondedAt: string | null; lostReason: string; sentQuoteValueCents: number }>) {
+  return rfqs.flatMap((rfq) => {
+    const responseMinutes = rfq.respondedAt == null ? null : Math.max(0, Math.round((Date.parse(rfq.respondedAt) - Date.parse(rfq.createdAt)) / 60000));
+    const row = { valueCents: 0, marginPercent: null as number | null, responseMinutes, lostReason: "" };
+    const rows: Array<{ stage: FunnelStage; valueCents: number; marginPercent: number | null; responseMinutes: number | null; lostReason: string }> = [
+      { ...row, stage: "ENQUIRY" },
+      { ...row, stage: "RFQ" },
+    ];
+    if (rfq.sentQuoteValueCents > 0) rows.push({ ...row, stage: "QUOTED", valueCents: rfq.sentQuoteValueCents });
+    if (rfq.respondedAt) rows.push({ ...row, stage: "REPLIED" });
+    if (rfq.status === "NEGOTIATION") rows.push({ ...row, stage: "REVISED" });
+    if (rfq.status === "WON") rows.push({ ...row, stage: "ACCEPTED" });
+    if (rfq.status === "LOST") rows.push({ ...row, stage: "LOST", lostReason: rfq.lostReason });
+    return rows;
+  });
+}
+
 function replyLines(matches: RankedProduct[], quantity: number) {
   return matches.flatMap((match) => {
     if (match.unitPriceCents == null || match.stockQty == null) return [];

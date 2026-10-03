@@ -8,11 +8,12 @@ import {
   quoteFollowUpAction,
   rankProductMatches,
   unpricedCatalogueNote,
+  funnelRowsFromRfqs,
   salesFunnelMetrics,
-  type FunnelStage,
   type RankedProduct,
 } from "../lib/sales-response";
 import type { ProductRequirement, SourcingCandidate } from "../lib/sourcing";
+import { lineTotalCents } from "../lib/quote";
 import { sendThreadReply } from "./reply-service";
 
 export { unpricedCatalogueNote };
@@ -177,16 +178,22 @@ export async function processQuoteFollowUps() {
 }
 
 export async function salesFunnelReport(workspaceId: string) {
-  const events = await getDb().salesFunnelEvent.findMany({
+  const rfqs = await getDb().rfq.findMany({
     where: { workspaceId },
-    include: { rfq: { select: { createdAt: true, respondedAt: true, lostReason: true } } },
+    select: {
+      status: true,
+      createdAt: true,
+      respondedAt: true,
+      lostReason: true,
+      quotes: { where: { status: "SENT" }, select: { lines: { select: { quantity: true, unitPriceCents: true } } } },
+    },
   });
-  return salesFunnelMetrics(events.map((event) => ({
-    stage: event.stage as FunnelStage,
-    valueCents: event.valueCents,
-    marginPercent: event.marginPercent,
-    responseMinutes: event.rfq?.respondedAt ? Math.max(0, Math.round((event.rfq.respondedAt.getTime() - event.rfq.createdAt.getTime()) / 60000)) : null,
-    lostReason: event.rfq?.lostReason ?? "",
-  })));
+  return salesFunnelMetrics(funnelRowsFromRfqs(rfqs.map((rfq) => ({
+    status: rfq.status,
+    createdAt: rfq.createdAt.toISOString(),
+    respondedAt: rfq.respondedAt?.toISOString() ?? null,
+    lostReason: rfq.lostReason,
+    sentQuoteValueCents: rfq.quotes.reduce((sum, quote) => sum + quote.lines.reduce((lineSum, line) => lineSum + (lineTotalCents(Number(line.quantity), line.unitPriceCents) ?? 0), 0), 0),
+  }))));
 }
 
