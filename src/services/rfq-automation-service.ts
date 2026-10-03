@@ -296,6 +296,8 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
             matchGrade: chosen.method,
             matchStatus: "MATCHED",
             matchNote: "Website catalogue. No supplier cost is on file.",
+            costStatus: "",
+            productId: null,
             stockNote: chosen.stockQty == null ? "" : `${chosen.stockQty} on the website`,
           },
         });
