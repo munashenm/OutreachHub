@@ -26,7 +26,7 @@ import { sendQuote } from "./quote-service";
 import { sendThreadReply } from "./reply-service";
 import { extractProductRequirements, planSourcing, QUANTITY_CLARIFICATION, requirementAwaitingQuantity, requirementSummary, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
 import { sourceExternalForRequirements } from "./external-sourcing-service";
-import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp } from "./sales-response-service";
+import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp, unpricedCatalogueNote } from "./sales-response-service";
 
 const BATCH = 15;
 
@@ -281,6 +281,30 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     await replyToCustomer( sales.message);
     return;
   }
+  if (plan.kind === "SOURCING" && requirement && sales) {
+    const catalogueNote = unpricedCatalogueNote(requirement, sales.matches);
+    if (catalogueNote) {
+      const note = requirementAwaitingQuantity(requirement) ? `${catalogueNote} The quantity was not stated.` : catalogueNote;
+      const chosen = sales.matches.find((match) => catalogueNote.startsWith(match.name));
+      const line = rfq.lines[0];
+      if (line && chosen) {
+        await db.rfqLine.update({
+          where: { id: line.id },
+          data: {
+            sourcedName: chosen.name,
+            sourceKind: "URBAN_FOCUS_CATALOGUE",
+            matchGrade: chosen.method,
+            matchStatus: "MATCHED",
+            matchNote: "Website catalogue. No supplier cost is on file.",
+            stockNote: chosen.stockQty == null ? "" : `${chosen.stockQty} on the website`,
+          },
+        });
+      }
+      await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: note } });
+      if (requirementAwaitingQuantity(requirement)) await replyToCustomer(QUANTITY_CLARIFICATION);
+      return;
+    }
+  }
   if (plan.kind === "SOURCING" && sales && (sales.action === "ALTERNATIVES" || sales.action === "PREPARE") && sales.matches.some((match) => (match.unitPriceCents ?? 0) > 0)) {
     await rememberAlternativeQuote(rfq, sales.matches, workspace.id, Math.max(1, requirement?.quantity ?? 1), sales.confidence);
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: sales.action === "ALTERNATIVES" ? "The exact product is unavailable. Verified alternatives are waiting for approval." : "A verified supplier price is waiting for approval." } });
@@ -471,6 +495,58 @@ async function sourcingPools(workspaceId: string): Promise<SourcingPools> {
     };
     if (row.sourceKind === "SUPPLIER_API") supplierApis.push(row);
     else supplierFeeds.push(row);
+  }
+  const scan = await db.storeCatalogueScan.findFirst({
+    where: { workspaceId, status: "COMPLETE" },
+    orderBy: { finishedAt: "desc" },
+    select: { id: true },
+  });
+  const storeItems = scan
+    ? await db.storeCatalogueItem.findMany({
+      where: { workspaceId, scanId: scan.id, published: true },
+      select: { productId: true, sku: true, name: true, brand: true, manufacturerPartNumber: true, specifications: true, description: true, stockQuantity: true },
+    })
+    : [];
+  const seenSkus = new Set(catalogue.map((item) => item.sku.toLowerCase()).filter(Boolean));
+  const costBySku = new Map<string, { costCents: number; markupPercent: number; fresh: boolean }>();
+  for (const offer of offers) {
+    if (!offer.costKnown || offer.costCents <= 0 || !offer.supplierSku) continue;
+    const fresh = now - offer.updatedAt.getTime() <= offer.supplier.priceSyncIntervalMinutes * 60 * 1000;
+    const key = offer.supplierSku.toLowerCase();
+    const current = costBySku.get(key);
+    if (!current || (fresh && !current.fresh) || offer.costCents < current.costCents) costBySku.set(key, { costCents: offer.costCents, markupPercent: offer.supplier.markupPercent, fresh });
+  }
+  for (const item of storeItems) {
+    const sku = item.sku.trim();
+    if (!sku || seenSkus.has(sku.toLowerCase())) continue;
+    seenSkus.add(sku.toLowerCase());
+    const cost = costBySku.get(sku.toLowerCase());
+    catalogue.push({
+      sourceKind: "URBAN_FOCUS_CATALOGUE",
+      sourceName: "Urban Focus",
+      sourceUrl: "",
+      sourceType: "INTERNAL",
+      productId: item.productId,
+      name: item.name,
+      brand: item.brand,
+      model: item.manufacturerPartNumber,
+      sku,
+      mpn: item.manufacturerPartNumber,
+      specifications: [item.specifications, item.description, item.name].filter(Boolean).join("\n"),
+      costExVatCents: cost?.fresh ? cost.costCents : null,
+      listedPriceCents: null,
+      vatIncluded: false,
+      shippingCents: 0,
+      procurementCents: 0,
+      importCents: 0,
+      riskPercent: 0,
+      markupPercent: cost?.markupPercent ?? 0,
+      stockQty: item.stockQuantity,
+      stockKnown: true,
+      fresh: item.stockQuantity > 0,
+      checkedAt: null,
+      reputable: true,
+    });
   }
   const externalCandidates: SourcingCandidate[] = external.map((offer) => ({
     sourceKind: "EXTERNAL_SOURCE",

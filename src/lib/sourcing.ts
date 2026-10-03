@@ -464,16 +464,27 @@ function specsFromText(text: string): ParsedSpecs {
   const ultra = text.match(/\bcore\s+ultra\s+([3579])\b/i);
   const core = text.match(/\bcore\s+i([3579])\b/i);
   const ryzen = text.match(/\bryzen\s+([3579])\b/i);
-  const ram = text.match(/\b(\d+)\s*gb(?:\s+ddr\d+)?\s*(?:ram|memory)\b/i);
-  const disk = text.match(/\b(\d+)\s*(gb|tb)(?:\s+pcie)?\s*(ssd|nvme|hdd)\b/i);
+  const ram = text.match(/\b(\d+)\s*gb(?:\s+ddr\d+)?\s*(?:ram|memory)\b/i) ?? text.match(/\b(?:memory|ram)\s*[:\-]?\s*(\d+)\s*gb\b/i);
+  const disk = text.match(/\b(\d+)\s*(gb|tb)(?:\s+pcie)?\s*(ssd|nvme|hdd)\b/i) ?? text.match(/\bstorage\s*[:\-]?\s*(\d+)\s*(gb|tb)\b/i);
   const screen = text.match(/\b(\d+(?:\.\d+)?)\s*(?:-| )?\s*(?:inch|inches|")/i);
-  const storageGb = disk?.[1] ? (disk[2].toLowerCase() === "tb" ? Number(disk[1]) * 1024 : Number(disk[1])) : null;
+  const thinkpadScreen = text.match(/\bthinkpad\s+[a-z]{0,3}(\d{2})\b/i);
+  let ramGb = ram ? Number(ram[1]) : null;
+  let storageGb = disk?.[1] ? (disk[2].toLowerCase() === "tb" ? Number(disk[1]) * 1024 : Number(disk[1])) : null;
+  if ((ramGb == null || storageGb == null) && /\b(?:thinkpad|laptop|notebook|core)\b/i.test(text)) {
+    const amounts = [...text.matchAll(/\b(\d+)\s*(gb|tb)\b/gi)].map((match) => match[2].toLowerCase() === "tb" ? Number(match[1]) * 1024 : Number(match[1]));
+    const memory = amounts.find((amount) => amount >= 4 && amount <= 64);
+    const drive = amounts.find((amount) => amount >= 128);
+    if (ramGb == null && memory != null && drive != null) ramGb = memory;
+    if (storageGb == null && drive != null) storageGb = drive;
+  }
+  const modelInches = thinkpadScreen ? Number(thinkpadScreen[1]) : null;
+  const screenInches = screen ? Number(screen[1]) : modelInches === 13 || modelInches === 14 || modelInches === 15 || modelInches === 16 ? modelInches : null;
   return {
     processor: ultra ? `Core Ultra ${ultra[1]}` : core ? `Core i${core[1]}` : ryzen ? `Ryzen ${ryzen[1]}` : "",
-    ramGb: ram ? Number(ram[1]) : null,
+    ramGb,
     storageGb,
     storageType: disk?.[3] ? (disk[3].toLowerCase() === "hdd" ? "HDD" : "SSD") : "",
-    screenInches: screen ? Number(screen[1]) : null,
+    screenInches,
     operatingSystem: /\bwin(?:dows)?\s*11\s+pro\b/i.test(text) ? "Windows 11 Pro" : /\bwin(?:dows)?\s*11\s+home\b/i.test(text) ? "Windows 11 Home" : /\bwin(?:dows)?\s*11\b/i.test(text) ? "Windows 11" : "",
   };
 }

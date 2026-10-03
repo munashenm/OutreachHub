@@ -249,3 +249,36 @@ Intel Core Ultra 7 155H
   if (plan.kind !== "CLARIFICATION") return;
   assert.equal(plan.message, ATTACHMENT_CLARIFICATION);
 });
+
+test("a website ThinkPad title meets the tender specification and is not priced without a supplier cost", () => {
+  const [requirement] = extractProductRequirements(`URGENT RFQ – ECPT Tender SCMU12-26/27-0003
+The required laptop configuration includes:
+Windows 11 Pro 64-bit
+Intel Core Ultra 7 155H
+16GB DDR5 RAM
+512GB PCIe NVMe SSD
+14-inch touchscreen display`);
+  const website = candidate({
+    sourceKind: "URBAN_FOCUS_CATALOGUE",
+    sourceName: "Urban Focus",
+    sourceType: "INTERNAL",
+    productId: null,
+    name: "Lenovo ThinkPad T14 Gen 6 Intel Core Ultra 7 16GB 512GB Win 11 Pro",
+    brand: "Lenovo",
+    model: "21QC000YZA",
+    sku: "21QC000YZA",
+    mpn: "21QC000YZA",
+    specifications: "Lenovo ThinkPad T14 Gen 6 Intel Core Ultra 7 16GB 512GB Win 11 Pro",
+    costExVatCents: null,
+    stockQty: 2,
+    fresh: true,
+  });
+  assert.equal(compareRequirement(requirement!, website), "MEETS_REQUIREMENT");
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [website] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "SOURCING");
+});
