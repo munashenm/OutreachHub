@@ -8,6 +8,7 @@ import {
   extractProductRequirements,
   landedCostCents,
   planSourcing,
+  requirementSummary,
   type SourcingCandidate,
   type SourcingPools,
 } from "./sourcing";
@@ -239,6 +240,9 @@ Intel Core Ultra 7 155H
   assert.equal(requirement?.storageType, "SSD");
   assert.equal(requirement?.operatingSystem, "Windows 11 Pro");
   assert.equal(requirement?.screenInches, 14);
+  assert.equal(requirementSummary(requirement!), "Laptop, Core Ultra 7, 16GB RAM, 512GB SSD, 14 inch, Windows 11 Pro");
+  const noted = planSourcing({ requirements: [requirement!], pools: emptyPools(), ...margins, now });
+  assert.equal(noted.kind, "SOURCING");
   const attached = extractProductRequirements("Please quote 4 business laptops. The specification is attached.")[0];
   const plan = planSourcing({ requirements: attached ? [attached] : [], pools: emptyPools(), ...margins, now });
   assert.equal(plan.kind, "CLARIFICATION");

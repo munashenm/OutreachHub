@@ -24,7 +24,7 @@ import { recordActivity } from "./activity-service";
 import { extractQuotationFields } from "./ai-service";
 import { sendQuote } from "./quote-service";
 import { sendThreadReply } from "./reply-service";
-import { extractProductRequirements, planSourcing, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
+import { extractProductRequirements, planSourcing, QUANTITY_CLARIFICATION, requirementAwaitingQuantity, requirementSummary, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
 import { sourceExternalForRequirements } from "./external-sourcing-service";
 import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp } from "./sales-response-service";
 
@@ -248,6 +248,7 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     if (notify) await sendSourcingReply(rfq, message);
   };
   const requirements = extractProductRequirements(`${rfq.sourceMessage?.subject ?? rfq.subject}\n${rfq.sourceMessage?.body || rfq.description}`);
+  await storeParsedRequirement(rfq, requirements[0], workspace.id);
   const margins = {
     minimumMarginPercent: workspace.minimumMarginPercent,
     autoQuoteMarginPercent: workspace.autoQuoteMarginPercent,
@@ -263,6 +264,9 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     }
     if (plan.kind === "SOURCING") plan = { ...plan, note: live.note };
   }
+  if (requirementAwaitingQuantity(requirements[0]) && plan.kind === "SOURCING") {
+    plan = { ...plan, message: QUANTITY_CLARIFICATION, note: "The specification was read. The quantity was not stated." };
+  }
   if (plan.kind === "CLARIFICATION") {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: plan.message } });
     await replyToCustomer( plan.message);
@@ -277,10 +281,10 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     await replyToCustomer( sales.message);
     return;
   }
-  if (plan.kind === "SOURCING" && sales?.action === "ALTERNATIVES") {
+  if (plan.kind === "SOURCING" && sales && (sales.action === "ALTERNATIVES" || sales.action === "PREPARE") && sales.matches.some((match) => (match.unitPriceCents ?? 0) > 0)) {
     await rememberAlternativeQuote(rfq, sales.matches, workspace.id, Math.max(1, requirement?.quantity ?? 1), sales.confidence);
-    await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: "The exact product is unavailable. Verified alternatives are waiting for approval." } });
-    await replyToCustomer( sales.message);
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: sales.action === "ALTERNATIVES" ? "The exact product is unavailable. Verified alternatives are waiting for approval." : "A verified supplier price is waiting for approval." } });
+    if (sales.action === "ALTERNATIVES" && sales.message) await replyToCustomer( sales.message);
     return;
   }
   if (plan.kind === "SOURCING") {
@@ -332,6 +336,11 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     }
   }
   if (sales) await db.quote.update({ where: { id: draft.id }, data: { confidenceScore: sales.confidence } });
+  if (requirementAwaitingQuantity(requirements[0])) {
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: QUANTITY_CLARIFICATION } });
+    await replyToCustomer(QUANTITY_CLARIFICATION);
+    return;
+  }
   if (!plan.send || sales?.action !== "AUTO_SEND") {
     if (sales?.action === "CLARIFY" && sales.message) {
       await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: sales.message } });
@@ -521,6 +530,30 @@ async function rememberAlternativeQuote(rfq: { id: string; lines: { id: string }
       where: { id: line.id },
       data: { productId: first.productId, sourcedName: first.name, matchStatus: "MATCHED", matchGrade: first.method, matchNote: "Closest available alternative." },
     });
+  }
+}
+
+async function storeParsedRequirement(rfq: { id: string; lines: { id: string; specifications: string }[] }, requirement: Parameters<typeof requirementSummary>[0] | undefined, workspaceId: string) {
+  const summary = requirement ? requirementSummary(requirement) : "";
+  if (!summary) return;
+  const db = getDb();
+  const line = rfq.lines[0];
+  if (!line) {
+    const created = await db.rfqLine.create({
+      data: {
+        workspaceId,
+        rfqId: rfq.id,
+        description: summary,
+        specifications: summary,
+        quantity: requirement?.quantity == null ? null : new Prisma.Decimal(requirement.quantity.toFixed(2)),
+      },
+    });
+    rfq.lines.unshift({ id: created.id, specifications: summary });
+    return;
+  }
+  if (!line.specifications.trim()) {
+    await db.rfqLine.update({ where: { id: line.id }, data: { specifications: summary } });
+    line.specifications = summary;
   }
 }
 

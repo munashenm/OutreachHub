@@ -2,6 +2,7 @@ import { priceQuotation } from "./automation";
 
 export const CLARIFICATION_REPLY = "Thank you for your request. To prepare an accurate quotation, could you please confirm the required processor, RAM, storage configuration and operating system?";
 export const ATTACHMENT_CLARIFICATION = "The specification appears to be in an attachment. Please paste the required make, model or specification, and the quantity, into your reply so we can quote it.";
+export const QUANTITY_CLARIFICATION = "The specification is noted. Please confirm the quantity to quote.";
 export const SOURCING_REPLY = "Thank you. We have received your request and are sourcing the requested configuration. We will send the quotation once current availability and pricing have been confirmed.";
 
 export type SourceKind = "URBAN_FOCUS_CATALOGUE" | "SUPPLIER_FEED" | "SUPPLIER_API" | "EXTERNAL_SOURCE";
@@ -154,10 +155,27 @@ export function extractProductRequirements(body: string): ProductRequirement[] {
   return groups.map((group) => requirementFromText(group.join("\n"))).filter((item) => item.quantity != null || item.model || item.sku || item.productType);
 }
 
+export function requirementSummary(requirement: ProductRequirement) {
+  return [
+    requirement.brandPreference,
+    requirement.model || requirement.productType,
+    requirement.processor,
+    requirement.ramGb == null ? "" : `${requirement.ramGb}GB RAM`,
+    requirement.storageGb == null ? "" : `${requirement.storageGb}GB ${requirement.storageType}`.trim(),
+    requirement.screenInches == null ? "" : `${requirement.screenInches} inch`,
+    requirement.operatingSystem,
+  ].filter(Boolean).join(", ").slice(0, 300);
+}
+
 export function requirementIsVague(requirement: ProductRequirement) {
   if (requirement.sku || requirement.mpn || requirement.model) return false;
   const specified = [requirement.processor, requirement.ramGb, requirement.storageGb, requirement.operatingSystem, requirement.screenInches, requirement.graphics].filter((value) => value != null && value !== "").length;
   return specified < 2;
+}
+
+export function requirementAwaitingQuantity(requirement: ProductRequirement | undefined) {
+  if (!requirement || requirement.quantity != null || requirement.sku || requirement.mpn || requirement.model) return false;
+  return !requirementIsVague(requirement);
 }
 
 export function sourcingCacheKey(requirement: ProductRequirement) {
