@@ -5,6 +5,17 @@ import { acceptProductImage, newProductDecision, seoFromProduct } from "../lib/a
 import { matchStoreProduct, skuKey } from "../lib/catalogue-reconcile";
 import { assertPublicHttpsUrl, markedUpCents, priceAllowedByMargin, stockLeft, storePushErrorMessage } from "../lib/stock";
 import {
+  STOCK_PUSH_BATCH,
+  STOCK_PUSH_BATCH_DELAY_MS,
+  STOCK_PUSH_BUDGET_MS,
+  stockDrainTimedOut,
+  stockPushTotals,
+  stockPushWritesContent,
+  stockRunShouldContinue,
+  stockWebsiteAction,
+  type StockStopReason,
+} from "../lib/stock-drain";
+import {
   chooseSupplierOffer,
   exclusiveCostCents,
   matchCatalogueOffer,
@@ -25,7 +36,7 @@ import { baselineIdentities } from "./catalogue-service";
 import { loadStoreProvider } from "./store/load";
 import type { Actor } from "./types";
 
-const BATCH = 40;
+const BATCH = STOCK_PUSH_BATCH;
 
 const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_.:-]*$/;
 
@@ -233,115 +244,284 @@ export async function fetchStoreOrders(workspaceId: string) {
   return loaded.provider.listOrders(40);
 }
 
-export async function pushStoreStock(workspaceId: string) {
+type StoreStockResult = {
+  pending: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  heldLocally: number;
+  heldSkus: string[];
+  pricesHeld: number;
+  remaining: number;
+  skippedNew: number;
+  continue: boolean;
+  requeued: boolean;
+  stoppedEarly: boolean;
+  error?: string;
+};
+
+export async function pushStoreStock(workspaceId: string, options?: { drain?: boolean; deadlineAt?: number }): Promise<StoreStockResult> {
   const loaded = await storeProviderFor(workspaceId);
-  if (!loaded) return { pushed: 0, pricesHeld: 0, pending: false, skippedNew: 0 };
-  const products = await getDb().product.findMany({
-    where: { workspaceId, updatedAt: { gt: loaded.workspace.storeLastSyncAt ?? new Date(0) } },
-    orderBy: { updatedAt: "asc" },
-    take: BATCH,
-  });
-  const productIds = products.map((product) => product.id);
-  const costs = await lowestCostByProduct(workspaceId, productIds);
-  const alternateSkus = await supplierSkusByProduct(workspaceId, productIds);
-  let pushed = 0;
+  const empty: StoreStockResult = {
+    pending: 0, processed: 0, succeeded: 0, failed: 0, heldLocally: 0, heldSkus: [], pricesHeld: 0,
+    remaining: 0, skippedNew: 0, continue: false, requeued: false, stoppedEarly: false,
+  };
+  if (!loaded) return empty;
+  const deadlineAt = options?.deadlineAt ?? Date.now() + STOCK_PUSH_BUDGET_MS;
+  let cursor = loaded.workspace.storeLastSyncAt ?? new Date(0);
+  let lastId = "";
+  const deferred: string[] = [];
+  const pending = await getDb().product.count({ where: pendingWhere(workspaceId, cursor, lastId, deferred) });
+  let succeeded = 0;
+  let failed = 0;
+  let heldLocally = 0;
   let pricesHeld = 0;
-  let skippedNew = 0;
-  let cursor = loaded.workspace.storeLastSyncAt;
+  const heldSkus: string[] = [];
+  let stopReason: StockStopReason = null;
+  let error: string | undefined;
   const reserved = await reservedByProduct(workspaceId);
   const baseline = await baselineIdentities(workspaceId);
-  try {
+  let unreachable = 0;
+
+  while (!stopReason) {
+    if (options?.drain && stockDrainTimedOut(Date.now(), deadlineAt)) {
+      stopReason = "budget";
+      break;
+    }
+    const products = await getDb().product.findMany({
+      where: pendingWhere(workspaceId, cursor, lastId, deferred),
+      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+      take: BATCH,
+    });
+    if (products.length === 0) break;
+    const productIds = products.map((product) => product.id);
+    const costs = await lowestCostByProduct(workspaceId, productIds);
+    const alternateSkus = await supplierSkusByProduct(workspaceId, productIds);
     for (const product of products) {
-      const available = stockLeft(product.stockOnHand, reserved.get(product.id) ?? 0);
-      const cost = costs.get(product.id) ?? 0;
-      const priceAllowed = priceAllowedByMargin(cost, product.unitPriceCents, loaded.workspace.minimumMarginPercent);
-      const alternate = alternateSkus.get(product.id) ?? [];
-      let matchedSku = await findStoreSku(loaded.provider, product.sku, alternate);
-      if (!matchedSku) {
-        const identity = await loaded.provider.findByIdentity({
-          sku: product.sku,
-          mpn: product.manufacturerPartNumber,
-          barcode: product.barcode,
-        });
-        if (identity) matchedSku = identity.sku;
+      if (options?.drain && stockDrainTimedOut(Date.now(), deadlineAt)) {
+        stopReason = "budget";
+        break;
       }
-      if (!matchedSku && baseline) {
-        const decision = matchStoreProduct({
-          sku: product.sku,
-          manufacturerPartNumber: product.manufacturerPartNumber,
-          barcode: product.barcode,
-          brand: product.brand,
-          name: product.name,
-          supplierSku: alternate[0],
-        }, baseline.items, baseline.confirmed);
-        if (decision.outcome === "MATCHED") matchedSku = decision.sku;
-      }
-      if (!matchedSku && product.reviewStatus === "PUBLISH") {
-        try {
-          await loaded.provider.createProduct({
-            sku: product.sku,
-            name: product.name,
-            description: product.description,
-            specifications: product.specifications,
-            unitPriceCents: product.unitPriceCents,
-            currency: product.currency,
-            stockQuantity: available,
-            published: true,
-            imageUrls: product.imageUrls,
-            manufacturerPartNumber: product.manufacturerPartNumber,
-            barcode: product.barcode,
-            brand: product.brand,
-            category: product.categoryName,
-            seoTitle: product.seoTitle,
-            metaDescription: product.metaDescription,
-            slug: product.slug,
-          });
-          const createdIdentity = await loaded.provider.findByIdentity({ sku: product.sku, mpn: product.manufacturerPartNumber, barcode: product.barcode });
-          matchedSku = createdIdentity?.sku ?? product.sku;
-          if (createdIdentity?.storeProductId) {
-            await getDb().product.update({ where: { id: product.id }, data: { storeProductId: createdIdentity.storeProductId, reviewStatus: "" } });
+      const outcome = await pushOneProduct(loaded, product, {
+        available: stockLeft(product.stockOnHand, reserved.get(product.id) ?? 0),
+        cost: costs.get(product.id) ?? 0,
+        alternates: alternateSkus.get(product.id) ?? [],
+        baseline,
+      });
+      if (outcome.kind === "failed") {
+        failed += 1;
+        deferred.push(product.id);
+        await getDb().product.update({ where: { id: product.id }, data: { stockOnHand: product.stockOnHand } });
+        if (outcome.unreachable) {
+          unreachable += 1;
+          if (unreachable >= 2) {
+            stopReason = "website-unreachable";
+            error = outcome.message;
+            break;
           }
-        } catch (error) {
-          const message = error instanceof AppError ? error.message : "";
-          if (!message.includes("already exists")) throw error;
-          const existing = await loaded.provider.findByIdentity({ sku: product.sku, mpn: product.manufacturerPartNumber, barcode: product.barcode });
-          if (!existing) throw error;
-          matchedSku = existing.sku;
+        } else {
+          unreachable = 0;
         }
-      }
-      if (!matchedSku) {
-        skippedNew += 1;
-        cursor = product.updatedAt;
         continue;
       }
-      await loaded.provider.updateStock(matchedSku, available);
-      await loaded.provider.updateContent(matchedSku, {
+      unreachable = 0;
+      if (outcome.kind === "held") {
+        heldLocally += 1;
+        if (heldSkus.length < 20) heldSkus.push(product.sku);
+      } else {
+        succeeded += 1;
+        if (outcome.priceHeld) pricesHeld += 1;
+      }
+      cursor = product.updatedAt;
+      lastId = product.id;
+      await getDb().workspace.update({
+        where: { id: loaded.workspace.id },
+        data: { storeLastSyncAt: cursor, storeLastError: null },
+      });
+    }
+    if (stopReason || !options?.drain || products.length < BATCH) break;
+    await new Promise((resolve) => setTimeout(resolve, STOCK_PUSH_BATCH_DELAY_MS));
+  }
+
+  if (error) {
+    await getDb().workspace.update({
+      where: { id: loaded.workspace.id },
+      data: { storeLastError: error.slice(0, 300) },
+    });
+  }
+  const remaining = await getDb().product.count({ where: pendingWhere(workspaceId, cursor, lastId, []) });
+  const totals = stockPushTotals({ pending, succeeded, failed, heldLocally, pricesHeld, remaining });
+  const result: StoreStockResult = {
+    ...totals,
+    heldSkus,
+    skippedNew: heldLocally,
+    continue: stockRunShouldContinue({ remaining, stopReason, error: error ?? null }),
+    requeued: failed > 0,
+    stoppedEarly: stopReason === "budget" && remaining > 0,
+    ...(error ? { error } : {}),
+  };
+  console.log(JSON.stringify({ event: "stock-push", workspaceId, ...result, heldSkus: undefined }));
+  if (totals.processed > 0) {
+    await recordActivity(getDb(), {
+      workspaceId,
+      actorId: null,
+      type: "STOCK_SYNCED",
+      summary: `Website stock run: ${totals.pending} pending, ${totals.processed} processed, ${totals.succeeded} succeeded, ${totals.failed} failed, ${totals.remaining} remaining. ${heldLocally} supplier products stay in OutreachHub and were not created on the website.`,
+    });
+  }
+  return result;
+}
+
+function pendingWhere(workspaceId: string, cursor: Date, lastId: string, excluded: string[]) {
+  return {
+    workspaceId,
+    ...(excluded.length > 0 ? { id: { notIn: excluded } } : {}),
+    OR: [
+      { updatedAt: { gt: cursor } },
+      ...(lastId ? [{ AND: [{ updatedAt: cursor }, { id: { gt: lastId } }] }] : []),
+    ],
+  };
+}
+
+async function pushOneProduct(
+  loaded: NonNullable<Awaited<ReturnType<typeof storeProviderFor>>>,
+  product: {
+    id: string;
+    sku: string;
+    name: string;
+    description: string;
+    specifications: string;
+    unitPriceCents: number;
+    currency: string;
+    imageUrls: string[];
+    manufacturerPartNumber: string;
+    barcode: string;
+    brand: string;
+    categoryName: string;
+    seoTitle: string;
+    metaDescription: string;
+    slug: string;
+    reviewStatus: string;
+    active: boolean;
+    updatedAt: Date;
+  },
+  input: {
+    available: number;
+    cost: number;
+    alternates: string[];
+    baseline: Awaited<ReturnType<typeof baselineIdentities>>;
+  },
+): Promise<{ kind: "pushed"; priceHeld: boolean } | { kind: "held" } | { kind: "failed"; message: string; unreachable: boolean }> {
+  let last: { kind: "failed"; message: string; unreachable: boolean } | null = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await sendProductStock(loaded, product, input);
+    } catch (error) {
+      const message = storePushErrorMessage(error);
+      last = { kind: "failed", message, unreachable: /could not reach the Urban Focus website|timed out/i.test(message) };
+    }
+  }
+  return last ?? { kind: "failed", message: "The store did not accept the catalogue update.", unreachable: false };
+}
+
+async function sendProductStock(
+  loaded: NonNullable<Awaited<ReturnType<typeof storeProviderFor>>>,
+  product: {
+    id: string;
+    sku: string;
+    name: string;
+    description: string;
+    specifications: string;
+    unitPriceCents: number;
+    currency: string;
+    imageUrls: string[];
+    manufacturerPartNumber: string;
+    barcode: string;
+    brand: string;
+    categoryName: string;
+    seoTitle: string;
+    metaDescription: string;
+    slug: string;
+    reviewStatus: string;
+    active: boolean;
+    updatedAt: Date;
+  },
+  input: {
+    available: number;
+    cost: number;
+    alternates: string[];
+    baseline: Awaited<ReturnType<typeof baselineIdentities>>;
+  },
+): Promise<{ kind: "pushed"; priceHeld: boolean } | { kind: "held" }> {
+  let matchedSku = await findStoreSku(loaded.provider, product.sku, input.alternates);
+  if (!matchedSku) {
+    const identity = await loaded.provider.findByIdentity({
+      sku: product.sku,
+      mpn: product.manufacturerPartNumber,
+      barcode: product.barcode,
+    });
+    if (identity) matchedSku = identity.sku;
+  }
+  if (!matchedSku && input.baseline) {
+    const decision = matchStoreProduct({
+      sku: product.sku,
+      manufacturerPartNumber: product.manufacturerPartNumber,
+      barcode: product.barcode,
+      brand: product.brand,
+      name: product.name,
+      supplierSku: input.alternates[0],
+    }, input.baseline.items, input.baseline.confirmed);
+    if (decision.outcome === "MATCHED") matchedSku = decision.sku;
+  }
+  const action = stockWebsiteAction(Boolean(matchedSku), product.reviewStatus);
+  if (action === "hold") return { kind: "held" };
+  if (action === "create") {
+    try {
+      await loaded.provider.createProduct({
+        sku: product.sku,
         name: product.name,
         description: product.description,
         specifications: product.specifications,
+        unitPriceCents: product.unitPriceCents,
+        currency: product.currency,
+        stockQuantity: input.available,
+        published: true,
+        imageUrls: product.imageUrls,
+        manufacturerPartNumber: product.manufacturerPartNumber,
+        barcode: product.barcode,
+        brand: product.brand,
+        category: product.categoryName,
         seoTitle: product.seoTitle,
         metaDescription: product.metaDescription,
+        slug: product.slug,
       });
-      if (product.imageUrls.length > 0) await loaded.provider.updateImages(matchedSku, product.imageUrls);
-      await loaded.provider.setPublished(matchedSku, product.active);
-      if (priceAllowed) await loaded.provider.updatePrice(matchedSku, product.unitPriceCents, product.currency);
-      else pricesHeld += 1;
-      pushed += 1;
-      cursor = product.updatedAt;
+    } catch (error) {
+      const message = error instanceof AppError ? error.message : "";
+      if (!message.includes("already exists")) throw error;
     }
-    await getDb().workspace.update({
-      where: { id: loaded.workspace.id },
-      data: { storeLastSyncAt: cursor, storeLastError: null },
-    });
-  } catch (error) {
-    const message = storePushErrorMessage(error);
-    await getDb().workspace.update({
-      where: { id: loaded.workspace.id },
-      data: { storeLastSyncAt: cursor, storeLastError: message.slice(0, 300) },
-    });
-    throw error instanceof AppError ? error : new AppError(message);
+    const createdIdentity = await loaded.provider.findByIdentity({ sku: product.sku, mpn: product.manufacturerPartNumber, barcode: product.barcode });
+    matchedSku = createdIdentity?.sku ?? matchedSku ?? product.sku;
+    if (createdIdentity?.storeProductId) {
+      await getDb().product.update({ where: { id: product.id }, data: { storeProductId: createdIdentity.storeProductId, reviewStatus: "" } });
+      await getDb().$executeRaw`UPDATE "Product" SET "updatedAt" = ${product.updatedAt} WHERE "id" = ${product.id}`;
+    }
   }
-  return { pushed, pricesHeld, pending: products.length === BATCH, skippedNew };
+  if (!matchedSku) return { kind: "held" };
+  const priceAllowed = priceAllowedByMargin(input.cost, product.unitPriceCents, loaded.workspace.minimumMarginPercent);
+  await loaded.provider.updateStock(matchedSku, input.available);
+  if (stockPushWritesContent(action)) {
+    await loaded.provider.updateContent(matchedSku, {
+      name: product.name,
+      description: product.description,
+      specifications: product.specifications,
+      seoTitle: product.seoTitle,
+      metaDescription: product.metaDescription,
+    });
+    if (product.imageUrls.length > 0) await loaded.provider.updateImages(matchedSku, product.imageUrls);
+    await loaded.provider.setPublished(matchedSku, true);
+  }
+  if (priceAllowed) await loaded.provider.updatePrice(matchedSku, product.unitPriceCents, product.currency);
+  return { kind: "pushed", priceHeld: !priceAllowed };
 }
 
 async function supplierSkusByProduct(workspaceId: string, productIds: string[]) {
@@ -445,7 +625,7 @@ export async function queueStockForWebsite(db: DbClient, workspaceId: string, pr
   });
 }
 
-export async function syncAllStockFeeds() {
+export async function syncAllStockFeeds(options?: { deadlineAt?: number }) {
   const suppliers = await getDb().supplier.findMany({
     where: { feedEnabled: true, stockFeedUrl: { not: null }, feedType: { in: ["JSON", "XML", "CSV_URL"] } },
     select: { id: true, workspaceId: true },
@@ -461,15 +641,45 @@ export async function syncAllStockFeeds() {
       results.push({ supplierId: supplier.id, error: error instanceof Error ? error.message : "Sync failed." });
     }
   }
+  const connected = await getDb().workspace.findMany({
+    where: { storeBaseUrl: { not: null }, storeKeyEncrypted: { not: null } },
+    select: { id: true, storeLastSyncAt: true },
+  });
+  for (const workspace of connected) {
+    const waiting = await getDb().product.count({
+      where: { workspaceId: workspace.id, updatedAt: { gt: workspace.storeLastSyncAt ?? new Date(0) } },
+    });
+    if (waiting > 0) workspaces.add(workspace.id);
+  }
   const stores = [];
   for (const workspaceId of workspaces) {
     try {
-      stores.push({ workspaceId, ...(await pushStoreStock(workspaceId)) });
+      stores.push({ workspaceId, ...(await pushStoreStock(workspaceId, { drain: true, deadlineAt: options?.deadlineAt })) });
     } catch (error) {
       stores.push({ workspaceId, error: error instanceof Error ? error.message : "Website update failed." });
     }
   }
   return { results, stores };
+}
+
+export async function continueStorePushes(deadlineAt?: number) {
+  const stores = [];
+  const connected = await getDb().workspace.findMany({
+    where: { storeBaseUrl: { not: null }, storeKeyEncrypted: { not: null } },
+    select: { id: true, storeLastSyncAt: true },
+  });
+  for (const workspace of connected) {
+    const waiting = await getDb().product.count({
+      where: { workspaceId: workspace.id, updatedAt: { gt: workspace.storeLastSyncAt ?? new Date(0) } },
+    });
+    if (waiting === 0) continue;
+    try {
+      stores.push({ workspaceId: workspace.id, ...(await pushStoreStock(workspace.id, { drain: true, deadlineAt })) });
+    } catch (error) {
+      stores.push({ workspaceId: workspace.id, error: error instanceof Error ? error.message : "Website update failed." });
+    }
+  }
+  return { results: [], stores };
 }
 
 async function lowestCostByProduct(workspaceId: string, productIds: string[]) {
