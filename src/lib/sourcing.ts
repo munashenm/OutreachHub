@@ -228,6 +228,7 @@ export function compareRequirement(requirement: ProductRequirement, candidate: S
   if (fields.includes("MISS")) return "PARTIAL";
   if (fields.length === 0) return identity ? "EXACT" : "DOES_NOT_MEET";
   if (identity && !fields.includes("EXCEEDS")) return "EXACT";
+  if (identityRequested && !identity && screenIsTheOnlySpec(requirement)) return "DOES_NOT_MEET";
   if (fields.includes("EXCEEDS")) return "EXCEEDS_REQUIREMENT";
   return "MEETS_REQUIREMENT";
 }
@@ -491,6 +492,10 @@ function specsFromText(text: string): ParsedSpecs {
 
 function hasComparableSpecs(requirement: ProductRequirement) {
   return Boolean(requirement.processor || requirement.ramGb || requirement.storageGb || requirement.operatingSystem || requirement.screenInches);
+}
+
+function screenIsTheOnlySpec(requirement: ProductRequirement) {
+  return requirement.screenInches != null && !requirement.processor && requirement.ramGb == null && requirement.storageGb == null && !requirement.operatingSystem;
 }
 
 function identityMatches(requirement: ProductRequirement, candidate: SourcingCandidate) {
