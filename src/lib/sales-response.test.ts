@@ -8,6 +8,7 @@ import {
   decideSalesResponse,
   quoteFollowUpAction,
   rankProductMatches,
+  funnelRowsFromRfqs,
   salesFunnelMetrics,
   unpricedCatalogueNote,
 } from "./sales-response";
@@ -133,6 +134,20 @@ test("funnel metrics count conversion, value, margin, response time, and lost re
   assert.equal(metrics.averageMarginPercent, 17);
   assert.equal(metrics.averageResponseMinutes, 60);
   assert.deepEqual(metrics.lostReasons, [{ reason: "Price", total: 1 }]);
+});
+
+test("existing quotation requests appear in the funnel before a quote is sent", () => {
+  const metrics = salesFunnelMetrics(funnelRowsFromRfqs([
+    { status: "REVIEWING", createdAt: "2026-10-02T04:00:00.000Z", respondedAt: null, lostReason: "", sentQuoteValueCents: 0 },
+    { status: "LOST", createdAt: "2026-10-01T04:00:00.000Z", respondedAt: "2026-10-01T05:00:00.000Z", lostReason: "Customer declined", sentQuoteValueCents: 17500 },
+  ]));
+  assert.equal(metrics.enquiry, 2);
+  assert.equal(metrics.rfq, 2);
+  assert.equal(metrics.quoted, 1);
+  assert.equal(metrics.quotationValueCents, 17500);
+  assert.equal(metrics.replied, 1);
+  assert.equal(metrics.lost, 1);
+  assert.equal(metrics.accepted, 0);
 });
 
 test("a reply without a verified price does not state a price", () => {
