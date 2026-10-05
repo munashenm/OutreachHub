@@ -192,6 +192,8 @@ model Workspace {
   externalOffers    ExternalSourceOffer[]
   funnelEvents      SalesFunnelEvent[]
   sourcingTasks     SourcingTask[]
+  attachments       StoredAttachment[]
+  tenderAnalyses    TenderAnalysis[]
 }
 
 model Membership {
@@ -438,8 +440,9 @@ model Message {
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   campaign  Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  prospect  Prospect? @relation(fields: [prospectId], references: [id], onDelete: SetNull)
-  rfqs      Rfq[]
+  prospect    Prospect? @relation(fields: [prospectId], references: [id], onDelete: SetNull)
+  rfqs        Rfq[]
+  attachments StoredAttachment[]
 
   @@unique([workspaceId, externalId])
   @@index([workspaceId, direction, status])
@@ -477,6 +480,7 @@ model Rfq {
   lines         RfqLine[]
   funnelEvents  SalesFunnelEvent[]
   sourcingTasks SourcingTask[]
+  analyses      TenderAnalysis[]
 
   @@index([workspaceId, status])
   @@index([workspaceId, createdAt])
@@ -609,6 +613,7 @@ model QuoteLine {
   sourceCheckedAt DateTime?
   matchGrade     String   @default("")
   costStatus     String   @default("")
+  scheduleNumber String   @default("")
 
   quote   Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
   product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
@@ -911,4 +916,57 @@ model SourcingTask {
 
   @@unique([rfqId, requirement])
   @@index([workspaceId, status])
+}
+
+model StoredAttachment {
+  id          String   @id @default(cuid())
+  workspaceId String
+  messageId   String
+  filename    String
+  contentType String
+  content     Bytes
+  createdAt   DateTime @default(now())
+
+  workspace Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  message   Message           @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  analyses  TenderAnalysis[]
+
+  @@index([workspaceId, messageId])
+}
+
+model TenderAnalysis {
+  id              String    @id @default(cuid())
+  workspaceId     String
+  rfqId           String
+  attachmentId    String?
+  documentType    String
+  referenceNumber String    @default("")
+  responseMode    String    @default("")
+  analysis        Json
+  approvedById    String    @default("")
+  approvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  workspace  Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  rfq        Rfq                @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  attachment StoredAttachment?  @relation(fields: [attachmentId], references: [id], onDelete: SetNull)
+  edits      DocumentEdit[]
+
+  @@index([workspaceId, rfqId])
+  @@index([referenceNumber])
+}
+
+model DocumentEdit {
+  id            String   @id @default(cuid())
+  analysisId    String
+  actorId       String   @default("")
+  field         String
+  previousValue String   @default("")
+  nextValue     String   @default("")
+  createdAt     DateTime @default(now())
+
+  analysis TenderAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId])
 }

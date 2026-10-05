@@ -2,7 +2,7 @@ import type { LeadStatus } from "../generated/prisma/client";
 import { getDb } from "../lib/db";
 import { isUniqueViolation } from "../lib/db";
 import { AppError } from "../lib/errors";
-import { extractPlainText, parseEmailAddress } from "../lib/gmail-message";
+import { extractPlainText, listGmailAttachments, parseEmailAddress } from "../lib/gmail-message";
 import {
   campaignLinkForInbound,
   isInvalidGrant,
@@ -13,7 +13,8 @@ import {
 import { fullName } from "../lib/format";
 import { leadStatusAfterReply } from "../lib/sending-window";
 import { recordActivity } from "./activity-service";
-import { getGmailMessage, googleAccountEmail, listGmailHistory, listRecentGmailIds, messageHeaders } from "./google-service";
+import { getGmailAttachment, getGmailMessage, googleAccountEmail, listGmailHistory, listRecentGmailIds, messageHeaders } from "./google-service";
+import { saveMessageAttachments } from "./document-analysis-service";
 import { accessTokenForMailbox } from "./mailbox-service";
 
 export async function syncConnectedGmail() {
@@ -148,7 +149,7 @@ async function ingestGmailMessage(input: { accessToken: string; workspaceId: str
   const companyId = prospect?.companyId ?? null;
   const receivedAt = headers.date ? new Date(headers.date) : new Date();
   try {
-    await getDb().$transaction(async (tx) => {
+    const messageId = await getDb().$transaction(async (tx) => {
       const created = await tx.message.create({
         data: {
           workspaceId: input.workspaceId,
@@ -191,8 +192,14 @@ async function ingestGmailMessage(input: { accessToken: string; workspaceId: str
           summary: `Reply received from ${fullName(prospect.firstName, prospect.lastName)}.`,
         });
       }
-      return created;
+      return created.id;
     });
+    const files = [];
+    for (const part of listGmailAttachments(message.payload)) {
+      const content = part.data ? Buffer.from(part.data, "base64url") : part.attachmentId ? await getGmailAttachment(input.accessToken, message.id, part.attachmentId) : null;
+      if (content) files.push({ filename: part.filename, contentType: part.contentType, content });
+    }
+    if (files.length > 0) await saveMessageAttachments(input.workspaceId, messageId, files);
     return true;
   } catch (error) {
     if (isUniqueViolation(error)) return false;

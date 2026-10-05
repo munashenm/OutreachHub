@@ -82,6 +82,7 @@ export async function generateQuotePdf(workspaceId: string, quoteId: string, opt
       requirementText: line.requirementText || quote.rfq.lines[index]?.specifications || quote.rfq.lines[index]?.description || "",
       matchGrade: line.matchGrade,
       costStatus: line.costStatus,
+      scheduleNumber: line.scheduleNumber,
     })),
   });
   const bytes = await renderQuotationPdf(document);

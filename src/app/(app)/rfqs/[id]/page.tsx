@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ReplyForm } from "@/components/inbox-actions";
 import { RfqStatusForm } from "@/components/rfq-status-form";
+import { DocumentAnalysisPanel } from "@/components/document-analysis-panel";
 import { QuotePanel } from "@/components/quote-panel";
 import { rerunRfqAction } from "@/actions/rfq-actions";
 import { PageHeader, Panel, buttonSecondary } from "@/components/ui";
@@ -18,6 +19,7 @@ import { stockLeft } from "@/lib/stock";
 import { requireSession } from "@/services/auth-service";
 import { getThread } from "@/services/reply-service";
 import { getRfq } from "@/services/rfq-service";
+import { listTenderAnalyses, responseModeForRfq } from "@/services/document-analysis-service";
 
 function sourceLabel(kind: string) {
   if (kind === "URBAN_FOCUS_CATALOGUE") return "Internal catalogue";
@@ -31,27 +33,39 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
   const { id } = await params;
   const rfq = await getRfq(session.workspace.id, id);
   if (!rfq) notFound();
-  const [thread, quotes, products, limits] = await Promise.all([
+  const [thread, quotes, products, limits, analyses, documentMode] = await Promise.all([
     getThread(session.workspace.id, rfq.sourceMessageId),
     quotesForRfq(session.workspace.id, rfq.id),
     listProducts(session.workspace.id),
     quoteApprovalLimits(session.workspace.id),
+    listTenderAnalyses(session.workspace.id, rfq.id),
+    responseModeForRfq(rfq.id),
   ]);
   const costs = await lowestCostsByProduct(session.workspace.id, products.map((product) => product.id));
   const reserved = await reservedByProduct(session.workspace.id);
   const target = replyTargets(rfq.sourceMessage);
   const draft = quotes.find((quote) => quote.status === "DRAFT");
   const sentQuotes = quotes.filter((quote) => quote.status === "SENT");
+  const sendBlocked = documentMode === "TENDER_PACKAGE"
+    ? "This tender requires the official submission method. An email quotation will not be sent."
+    : documentMode === "CANNOT_QUOTE"
+      ? "A mandatory specification is missing or cannot be satisfied, so a quotation email will not be sent."
+      : "";
   return (
     <div className="space-y-4">
       <PageHeader title={rfq.subject} description={`Created ${formatDateTime(rfq.createdAt)}`} actions={<Link href="/rfqs" className="text-sm text-accent">Back to RFQs</Link>} />
+      <nav className="flex gap-4 text-sm">
+        <a className="text-accent" href="#sourcing">Sourcing</a>
+        <a className="text-accent" href="#documents">Document Analysis</a>
+        <a className="text-accent" href="#quote">Quotation</a>
+      </nav>
       <Panel className="grid gap-3 p-5 text-sm md:grid-cols-2">
         <p><span className="text-muted">Customer: </span>{rfq.prospect ? <Link className="hover:underline" href={`/prospects/${rfq.prospect.id}`}>{fullName(rfq.prospect.firstName, rfq.prospect.lastName)}</Link> : rfq.sourceMessage.fromName || rfq.sourceMessage.fromEmail || "Unknown sender"}</p>
         <p><span className="text-muted">Company: </span>{rfq.company ? <Link className="hover:underline" href={`/companies/${rfq.company.id}`}>{rfq.company.companyName}</Link> : "—"}</p>
         <p className="md:col-span-2"><span className="text-muted">Original enquiry: </span><Link className="hover:underline" href={`/inbox/${rfq.sourceMessageId}`}>{rfq.sourceMessage.subject}</Link></p>
         {rfq.automationNote ? <p className="md:col-span-2"><span className="text-muted">Automation: </span>{rfq.automationNote}</p> : null}
       </Panel>
-      <Panel className="p-5">
+      <Panel className="p-5" id="sourcing">
           <h2 className="font-semibold">Sourcing</h2>
           {rfq.lines.length === 0 ? <p className="mt-3 text-sm text-muted">No specification line yet. Search again reads the original enquiry and does not send an email.</p> : (
           <ul className="mt-3 space-y-4 text-sm">
@@ -81,6 +95,22 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
             <button className={buttonSecondary}>Search again</button>
           </form>
         </Panel>
+      <Panel className="p-5" id="documents">
+        <h2 className="font-semibold">Document Analysis</h2>
+        <div className="mt-4">
+          <DocumentAnalysisPanel
+            rfqId={rfq.id}
+            documents={analyses.map((row) => ({ id: row.id, record: row.record, approvedById: row.approvedById }))}
+            sendBlocked={sendBlocked}
+            quotePreview={(draft?.lines ?? []).map((line) => ({
+              description: line.description,
+              quantity: Number(line.quantity).toString(),
+              unitPriceCents: line.unitPriceCents,
+              scheduleNumber: line.scheduleNumber,
+            }))}
+          />
+        </div>
+      </Panel>
       <Panel className="p-5">
         <h2 className="font-semibold">Conversation</h2>
         <div className="mt-4 space-y-4">
@@ -93,7 +123,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
           ))}
         </div>
       </Panel>
-      <Panel className="p-5">
+      <Panel className="p-5" id="quote">
         <h2 className="font-semibold">Quote</h2>
         <p className="mt-1 text-sm text-muted">Lines are priced from the catalogue or typed in. The draft follows the current product specification and images. Sending uses the connected Gmail mailbox, stays in this thread, and keeps that copy on the quotation.</p>
         {draft ? <p className="mt-2 text-sm">Confidence score: {draft.confidenceScore}</p> : null}
@@ -127,6 +157,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
             companyName={rfq.company?.companyName ?? ""}
             minimumMarginPercent={limits.minimumMarginPercent}
             autoSendMarginPercent={limits.autoSendMarginPercent}
+            emailBlocked={sendBlocked}
           />
         </div>
         {sentQuotes.length > 0 ? (

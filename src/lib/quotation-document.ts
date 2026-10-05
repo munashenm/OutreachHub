@@ -44,6 +44,7 @@ export type QuotationLineInput = {
   requirementText: string;
   matchGrade: string;
   costStatus: string;
+  scheduleNumber?: string;
 };
 
 export type QuotationDocument = {
@@ -68,6 +69,7 @@ export type QuotationDocument = {
     quantity: number;
     unitPriceCents: number;
     lineTotalCents: number;
+    scheduleNumber: string;
   }>;
   subtotalExclCents: number;
   vatCents: number;
@@ -197,13 +199,14 @@ export function buildQuotationDocument(input: {
     deliveryLocation: input.deliveryLocation.trim(),
     subject: input.subject.trim(),
     company,
-    lines: input.lines.map((line) => ({
+    lines: input.lines.map((line, index) => ({
       description: line.modelName.trim() || line.description.trim(),
       configuration: shortConfiguration(line.specifications),
       identity: [line.sku, line.manufacturerPartNumber].filter(Boolean).join(" · "),
       quantity: line.quantity,
       unitPriceCents: line.unitPriceCents,
       lineTotalCents: lineTotalCents(line.quantity, line.unitPriceCents) ?? 0,
+      scheduleNumber: line.scheduleNumber?.trim() || String(index + 1),
     })),
     ...totals,
     terms,

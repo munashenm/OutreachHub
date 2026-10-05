@@ -22,6 +22,7 @@ export function QuotePanel({
   companyName,
   minimumMarginPercent,
   autoSendMarginPercent,
+  emailBlocked = "",
 }: {
   rfqId: string;
   quoteId: string | null;
@@ -34,6 +35,7 @@ export function QuotePanel({
   companyName: string;
   minimumMarginPercent: number;
   autoSendMarginPercent: number;
+  emailBlocked?: string;
 }) {
   const [state, formAction, pending] = useActionState(addQuoteLineAction, initialActionState);
   const [productId, setProductId] = useState("");
@@ -187,7 +189,8 @@ export function QuotePanel({
                 <textarea id="references" name="references" className={textAreaClass} value={references} onChange={(event) => setReferences(event.target.value)} placeholder="https://" />
               </Field>
             ) : <input type="hidden" name="references" value="" />}
-            <button className={buttonPrimary} disabled={sending || lines.length === 0 || heldLines.length > 0}>{sending ? "Sending..." : "Send Quote"}</button>
+            <button className={buttonPrimary} disabled={sending || lines.length === 0 || heldLines.length > 0 || Boolean(emailBlocked)}>{sending ? "Sending..." : "Send Quote"}</button>
+            {emailBlocked ? <p className="text-sm text-muted">{emailBlocked}</p> : null}
           </form>
           {quoteId && lines.length > 0 ? (
             <p className="flex flex-wrap gap-3 text-sm">

@@ -1,9 +1,21 @@
 export type GmailPart = {
   mimeType?: string;
-  body?: { data?: string };
+  filename?: string;
+  body?: { data?: string; attachmentId?: string; size?: number };
   parts?: GmailPart[];
   headers?: { name: string; value: string }[];
 };
+
+export function listGmailAttachments(payload: GmailPart | undefined): Array<{ filename: string; contentType: string; data?: string; attachmentId?: string }> {
+  if (!payload) return [];
+  const found: Array<{ filename: string; contentType: string; data?: string; attachmentId?: string }> = [];
+  const filename = payload.filename?.trim() ?? "";
+  if (filename && (payload.body?.data || payload.body?.attachmentId)) {
+    found.push({ filename, contentType: payload.mimeType || "application/octet-stream", data: payload.body?.data, attachmentId: payload.body?.attachmentId });
+  }
+  for (const part of payload.parts ?? []) found.push(...listGmailAttachments(part));
+  return found;
+}
 
 export function parseEmailAddress(header: string) {
   const match = header.match(/<([^>]+)>/);

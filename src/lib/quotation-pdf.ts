@@ -92,7 +92,7 @@ function drawSchedule(pdf: Pdf, document: QuotationDocument) {
     const y = pdf.y;
     pdf.rect(40, y, 515, height).fillColor(index % 2 === 0 ? "#F7FAFC" : "#FFFFFF").fill();
     pdf.fillColor("#111827").font("Helvetica").fontSize(8);
-    pdf.text(String(index + 1), columns[0] + 4, y + 6, { width: widths[0] });
+    pdf.text(line.scheduleNumber || String(index + 1), columns[0] + 4, y + 6, { width: widths[0] });
     pdf.text(body, columns[1] + 4, y + 6, { width: widths[1] - 8 });
     pdf.text(String(line.quantity), columns[2] + 4, y + 6, { width: widths[2] - 8, align: "right" });
     pdf.text(moneyLabel(line.unitPriceCents, document.currency), columns[3] + 4, y + 6, { width: widths[3] - 8, align: "right" });

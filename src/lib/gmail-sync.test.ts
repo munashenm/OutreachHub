@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractPlainText, parseEmailAddress, replyTargets } from "./gmail-message";
+import { extractPlainText, listGmailAttachments, parseEmailAddress, replyTargets } from "./gmail-message";
 import {
   campaignLinkForInbound,
   canSendPromotional,
@@ -96,4 +96,15 @@ test("reads the plain text part of a Gmail payload", () => {
   });
   assert.equal(text, "Hello Ada");
   assert.equal(parseEmailAddress("Ada Buyer <ada@buyer.co.za>").email, "ada@buyer.co.za");
+});
+
+test("lists named Gmail attachments and keeps inline body text separate", () => {
+  const files = listGmailAttachments({
+    mimeType: "multipart/mixed",
+    parts: [
+      { mimeType: "text/plain", body: { data: Buffer.from("Please quote", "utf8").toString("base64url") } },
+      { mimeType: "application/pdf", filename: "schedule.pdf", body: { attachmentId: "att-1" } },
+    ],
+  });
+  assert.deepEqual(files, [{ filename: "schedule.pdf", contentType: "application/pdf", data: undefined, attachmentId: "att-1" }]);
 });

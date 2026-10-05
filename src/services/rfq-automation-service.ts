@@ -27,6 +27,8 @@ import { sendThreadReply } from "./reply-service";
 import { extractProductRequirements, planSourcing, QUANTITY_CLARIFICATION, requirementAwaitingQuantity, requirementSummary, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
 import { sourceExternalForRequirements } from "./external-sourcing-service";
 import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp, unpricedCatalogueNote } from "./sales-response-service";
+import { analyseRfqDocuments, analysisTextForRfq, listTenderAnalyses, responseModeForRfq, saveAnalysisMatches } from "./document-analysis-service";
+import { matchRequestedSpecification, type AnalysisMatch } from "../lib/document-analysis";
 
 const BATCH = 15;
 
@@ -99,6 +101,12 @@ async function processInboundMessage(messageId: string) {
     return kind;
   }
   const rfq = existing ?? await createRfq(message);
+  const documentMode = await analyseRfqDocuments(message.workspaceId, rfq.id);
+  if (documentMode === "TENDER_PACKAGE") {
+    await quoteRfq(rfq.id, workspace, { notify: false });
+    await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
+    return "tender";
+  }
   if (!rfq.acknowledgementSentAt && message.fromEmail) {
     await sendThreadReply(
       { userId: "system", workspaceId: message.workspaceId },
@@ -236,6 +244,54 @@ export async function rerunRfqSourcing(workspaceId: string, rfqId: string) {
   await quoteRfq(rfqId, workspace, { notify: false });
 }
 
+export async function findDocumentProducts(workspaceId: string, rfqId: string) {
+  const analyses = await listTenderAnalyses(workspaceId, rfqId);
+  if (analyses.length === 0) return;
+  const pools = await sourcingPools(workspaceId);
+  const candidates = [...pools.catalogue, ...pools.supplierFeeds, ...pools.supplierApis, ...pools.external];
+  const observedAt = new Date().toISOString();
+  const matchesByAnalysis = new Map<string, AnalysisMatch[]>();
+  for (const analysis of analyses) {
+    const matches: AnalysisMatch[] = [];
+    for (const item of analysis.record.items) {
+      const ranked = candidates.map((candidate) => ({ candidate, result: matchRequestedSpecification(item, candidate) }))
+        .filter((entry) => entry.result.match !== "NO MATCH")
+        .sort((left, right) => matchRank(left.result.match) - matchRank(right.result.match));
+      const best = ranked[0];
+      if (!best) {
+        matches.push({ lineNumber: item.lineNumber, match: "NO MATCH", explanation: "No catalogue or supplier product meets this line.", productId: null, productName: "", sku: "", sourceKind: "", sourceName: "", sourceUrl: "", observedPriceCents: null, vatIncluded: false, availability: "", observedAt, pricedFromSupplier: false });
+        continue;
+      }
+      const supplierPriced = best.candidate.sourceKind !== "EXTERNAL_SOURCE" && (best.candidate.costExVatCents ?? 0) > 0 && best.candidate.fresh;
+      matches.push({
+        lineNumber: item.lineNumber,
+        match: best.result.match,
+        explanation: best.result.explanation,
+        productId: best.candidate.productId,
+        productName: best.candidate.name,
+        sku: best.candidate.sku,
+        sourceKind: best.candidate.sourceKind,
+        sourceName: best.candidate.sourceName,
+        sourceUrl: best.candidate.sourceUrl,
+        observedPriceCents: best.candidate.sourceKind === "EXTERNAL_SOURCE" ? best.candidate.listedPriceCents : null,
+        vatIncluded: best.candidate.vatIncluded,
+        availability: best.candidate.stockQty == null ? "" : `${best.candidate.stockQty} available`,
+        observedAt,
+        pricedFromSupplier: supplierPriced && best.result.match === "MATCH",
+      });
+    }
+    matchesByAnalysis.set(analysis.id, matches);
+  }
+  await saveAnalysisMatches(workspaceId, rfqId, matchesByAnalysis);
+}
+
+function matchRank(match: AnalysisMatch["match"]) {
+  if (match === "MATCH") return 0;
+  if (match === "PARTIAL MATCH") return 1;
+  if (match === "NEEDS REVIEW") return 2;
+  return 3;
+}
+
 async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }, options?: { notify?: boolean }) {
   const notify = options?.notify !== false;
   const db = getDb();
@@ -247,7 +303,8 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   const replyToCustomer = async (message: string) => {
     if (notify) await sendSourcingReply(rfq, message);
   };
-  const requirements = extractProductRequirements(`${rfq.sourceMessage?.subject ?? rfq.subject}\n${rfq.sourceMessage?.body || rfq.description}`);
+  const documentText = await analysisTextForRfq(rfq.id);
+  const requirements = extractProductRequirements(`${documentText}\n${rfq.sourceMessage?.subject ?? rfq.subject}\n${rfq.sourceMessage?.body || rfq.description}`.trim());
   await storeParsedRequirement(rfq, requirements[0], workspace.id);
   const margins = {
     minimumMarginPercent: workspace.minimumMarginPercent,
@@ -376,6 +433,21 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: plan.note } });
     return;
   }
+  const documentMode = await responseModeForRfq(rfq.id);
+  if (documentMode && documentMode !== "AUTO_SEND") {
+    await db.rfq.update({
+      where: { id: rfq.id },
+      data: {
+        status: "REVIEWING",
+        automationNote: documentMode === "TENDER_PACKAGE"
+          ? "This tender requires the official submission method. No quotation email was sent."
+          : documentMode === "CANNOT_QUOTE"
+            ? "A mandatory specification is missing or cannot be satisfied."
+            : "The document needs approval before a quotation is sent.",
+      },
+    });
+    return;
+  }
   if (!notify) {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: plan.note } });
     return;
@@ -383,7 +455,7 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   await sendQuote({ userId: "system", workspaceId: workspace.id }, rfq.id, { validDays: 14, notes: draft.notes });
 }
 
-async function sourcingPools(workspaceId: string): Promise<SourcingPools> {
+export async function sourcingPools(workspaceId: string): Promise<SourcingPools> {
   const db = getDb();
   const now = Date.now();
   const freshAfter = new Date(now - 24 * 60 * 60 * 1000);
