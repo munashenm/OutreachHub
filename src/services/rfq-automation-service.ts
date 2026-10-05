@@ -1,6 +1,5 @@
 import { Prisma } from "../generated/prisma/client";
 import {
-  ACKNOWLEDGEMENT,
   canAutoSend,
   classifyCustomerReply,
   classifyInbound,
@@ -29,6 +28,7 @@ import { sourceExternalForRequirements } from "./external-sourcing-service";
 import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp, unpricedCatalogueNote } from "./sales-response-service";
 import { analyseRfqDocuments, analysisTextForRfq, listTenderAnalyses, responseModeForRfq, saveAnalysisMatches } from "./document-analysis-service";
 import { matchRequestedSpecification, UNPRICED_LINE, type AnalysisMatch } from "../lib/document-analysis";
+import { determineInitialResponse, sendResponseOnce, type InitialResponse, type ProcessingRow, type ProcessingStore, type ResponseFacts } from "../lib/inbound-response";
 
 const BATCH = 15;
 
@@ -97,29 +97,46 @@ async function processInboundMessage(messageId: string) {
     return "reply";
   }
   if (!isQuotationRequest(kind)) {
-    await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
-    return kind;
+    const delivery = await sendResponseOnce({
+      gmailMessageId: message.externalId || message.id,
+      threadId: message.threadId ?? "",
+      response: { decision: "NO_RESPONSE", autoReplyType: "NONE", message: "" },
+      store: processingStore(message.workspaceId, message.id),
+      send: async () => undefined,
+    });
+    if (!delivery.blocked || delivery.finished) await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
+    return delivery.blocked ? "already-replied" : kind;
   }
   const rfq = existing ?? await createRfq(message);
   const documentMode = await analyseRfqDocuments(message.workspaceId, rfq.id);
-  if (documentMode === "TENDER_PACKAGE") {
-    await quoteRfq(rfq.id, workspace, { notify: false });
-    await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
-    return "tender";
-  }
-  if (!rfq.acknowledgementSentAt && message.fromEmail) {
-    await sendThreadReply(
-      { userId: "system", workspaceId: message.workspaceId },
-      { messageId: message.id, to: message.fromEmail, cc: "", subject: replySubject(message.subject), body: ACKNOWLEDGEMENT },
-    );
-    await db.rfq.update({ where: { id: rfq.id }, data: { acknowledgementSentAt: new Date() } });
-  }
-  await quoteRfq(rfq.id, workspace);
-  await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
-  return "rfq";
+  const outcome = documentMode === "TENDER_PACKAGE"
+    ? await quoteRfq(rfq.id, workspace, { notify: false })
+    : await quoteRfq(rfq.id, workspace);
+  const gmailMessageId = message.externalId || message.id;
+  const delivery = await sendResponseOnce({
+    gmailMessageId,
+    threadId: message.threadId ?? "",
+    response: outcome,
+    quoteId: outcome.quoteId,
+    store: processingStore(message.workspaceId, message.id),
+    send: async () => {
+      if (!message.fromEmail) return;
+      if (outcome.decision === "QUOTE_READY") {
+        await sendQuote({ userId: "system", workspaceId: message.workspaceId }, rfq.id, { validDays: 14, notes: outcome.quoteNotes });
+        return;
+      }
+      await sendThreadReply(
+        { userId: "system", workspaceId: message.workspaceId },
+        { messageId: message.id, to: message.fromEmail, cc: "", subject: replySubject(message.subject), body: outcome.message },
+      );
+      await db.rfq.update({ where: { id: rfq.id }, data: { acknowledgementSentAt: new Date() } });
+    },
+  });
+  if (!delivery.blocked || delivery.finished) await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
+  return documentMode === "TENDER_PACKAGE" ? "tender" : delivery.blocked ? "already-replied" : "rfq";
 }
 
-async function handleQuoteReply(message: { id: string; workspaceId: string; body: string; subject: string; fromEmail: string | null }, rfqId: string) {
+async function handleQuoteReply(message: { id: string; workspaceId: string; body: string; subject: string; fromEmail: string | null; externalId?: string | null; threadId?: string | null }, rfqId: string) {
   const db = getDb();
   const kind = classifyCustomerReply(`${message.subject}\n${message.body}`);
   const rfq = await db.rfq.findFirst({
@@ -150,15 +167,31 @@ async function handleQuoteReply(message: { id: string; workspaceId: string; body
       specifications: line?.specifications || line?.product?.specifications || "",
     });
     if (reply && message.fromEmail) {
-      await sendThreadReply(
-        { userId: "system", workspaceId: message.workspaceId },
-        { messageId: message.id, to: message.fromEmail, cc: "", subject: replySubject(message.subject), body: reply },
-      );
-    } else {
-      await db.rfq.update({ where: { id: rfq.id }, data: { automationNote: "The reply needs a person to answer it." } });
+      const delivery = await sendResponseOnce({
+        gmailMessageId: message.externalId || message.id,
+        threadId: message.threadId ?? "",
+        response: { decision: "NEEDS_CLARIFICATION", autoReplyType: "CLARIFICATION", message: reply },
+        store: processingStore(message.workspaceId, message.id),
+        send: async () => {
+          await sendThreadReply(
+            { userId: "system", workspaceId: message.workspaceId },
+            { messageId: message.id, to: message.fromEmail ?? "", cc: "", subject: replySubject(message.subject), body: reply },
+          );
+        },
+      });
+      if (!delivery.blocked || delivery.finished) await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
+      return;
     }
+    await db.rfq.update({ where: { id: rfq.id }, data: { automationNote: "The reply needs a person to answer it." } });
   }
-  await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
+  const delivery = await sendResponseOnce({
+    gmailMessageId: message.externalId || message.id,
+    threadId: message.threadId ?? "",
+    response: { decision: "NO_RESPONSE", autoReplyType: "NONE", message: "" },
+    store: processingStore(message.workspaceId, message.id),
+    send: async () => undefined,
+  });
+  if (!delivery.blocked || delivery.finished) await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
 }
 
 async function extractInboundRfq(body: string) {
@@ -296,17 +329,33 @@ function matchRank(match: AnalysisMatch["match"]) {
   return 3;
 }
 
-async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }, options?: { notify?: boolean }) {
+async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }, options?: { notify?: boolean }): Promise<InitialResponse & { quoteId: string; quoteNotes: string }> {
   const notify = options?.notify !== false;
+  const none = { decision: "NO_RESPONSE" as const, autoReplyType: "NONE" as const, message: "", quoteId: "", quoteNotes: "" };
+  const respond = (facts: Partial<ResponseFacts>, quoteId = ""): InitialResponse & { quoteId: string; quoteNotes: string } => ({
+    ...determineInitialResponse({
+      quotationRequest: true,
+      tenderPackage: false,
+      planKind: "NONE",
+      planSend: false,
+      planMessage: "",
+      salesAction: "",
+      salesMessage: "",
+      catalogueProductNamed: false,
+      awaitingQuantity: false,
+      documentBlocksAutoSend: false,
+      notify,
+      ...facts,
+    }),
+    quoteId,
+    quoteNotes: "",
+  });
   const db = getDb();
   const rfq = await db.rfq.findFirst({
     where: { id: rfqId, workspaceId: workspace.id },
     include: { lines: true, quotes: true, sourceMessage: true },
   });
-  if (!rfq || rfq.quotes.some((quote) => quote.status === "SENT")) return;
-  const replyToCustomer = async (message: string) => {
-    if (notify) await sendSourcingReply(rfq, message);
-  };
+  if (!rfq || rfq.quotes.some((quote) => quote.status === "SENT")) return none;
   const documentText = await analysisTextForRfq(rfq.id);
   const requirements = extractProductRequirements(`${documentText}\n${rfq.sourceMessage?.subject ?? rfq.subject}\n${rfq.sourceMessage?.body || rfq.description}`.trim());
   await storeParsedRequirement(rfq, requirements[0], workspace.id);
@@ -330,8 +379,7 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   }
   if (plan.kind === "CLARIFICATION") {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: plan.message } });
-    await replyToCustomer( plan.message);
-    return;
+    return respond({ planKind: "CLARIFICATION", planMessage: plan.message });
   }
   const requirement = requirements[0];
   const sales = requirement
@@ -339,8 +387,7 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     : null;
   if (plan.kind === "SOURCING" && sales?.action === "CLARIFY") {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: sales.message } });
-    await replyToCustomer( sales.message);
-    return;
+    return respond({ planKind: "SOURCING", salesAction: "CLARIFY", salesMessage: sales.message });
   }
   if (plan.kind === "SOURCING" && requirement && sales) {
     const catalogueNote = unpricedCatalogueNote(requirement, sales.matches);
@@ -364,25 +411,22 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
         });
       }
       await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: note } });
-      if (requirementAwaitingQuantity(requirement)) await replyToCustomer(QUANTITY_CLARIFICATION);
-      return;
+      return respond({ planKind: "SOURCING", catalogueProductNamed: true, awaitingQuantity: requirementAwaitingQuantity(requirement) });
     }
   }
   if (plan.kind === "SOURCING" && sales && (sales.action === "ALTERNATIVES" || sales.action === "PREPARE") && sales.matches.some((match) => (match.unitPriceCents ?? 0) > 0)) {
     await rememberAlternativeQuote(rfq, sales.matches, workspace.id, Math.max(1, requirement?.quantity ?? 1), sales.confidence);
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: sales.action === "ALTERNATIVES" ? "The exact product is unavailable. Verified alternatives are waiting for approval." : "A verified supplier price is waiting for approval." } });
-    if (sales.action === "ALTERNATIVES" && sales.message) await replyToCustomer( sales.message);
-    return;
+    return respond({ planKind: "SOURCING", catalogueProductNamed: true, salesAction: sales.action === "ALTERNATIVES" ? "ALTERNATIVES" : "PREPARE", salesMessage: sales.message });
   }
   if (plan.kind === "SOURCING") {
     if (sales?.action === "EXTERNAL_TASK") await openSourcingTask(workspace.id, rfq.id, requirement?.requestedText || rfq.subject);
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "SOURCING", automationNote: plan.note } });
-    await replyToCustomer( plan.message);
-    return;
+    return respond({ planKind: "SOURCING", planMessage: plan.message, salesAction: sales?.action === "EXTERNAL_TASK" ? "EXTERNAL_TASK" : "" });
   }
   if (plan.kind === "STAFF_REVIEW") {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: plan.note } });
-    return;
+    return respond({ planKind: "STAFF_REVIEW" });
   }
   const recommended = plan.options[0];
   if (recommended && rfq.lines[0]) {
@@ -425,17 +469,15 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   if (sales) await db.quote.update({ where: { id: draft.id }, data: { confidenceScore: sales.confidence } });
   if (requirementAwaitingQuantity(requirements[0])) {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: QUANTITY_CLARIFICATION } });
-    await replyToCustomer(QUANTITY_CLARIFICATION);
-    return;
+    return respond({ planKind: "QUOTE", awaitingQuantity: true });
   }
   if (!plan.send || sales?.action !== "AUTO_SEND") {
     if (sales?.action === "CLARIFY" && sales.message) {
       await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: sales.message } });
-      await replyToCustomer( sales.message);
-      return;
+      return respond({ planKind: "QUOTE", salesAction: "CLARIFY", salesMessage: sales.message });
     }
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: plan.note } });
-    return;
+    return respond({ planKind: "QUOTE", planSend: false, catalogueProductNamed: true });
   }
   const documentMode = await responseModeForRfq(rfq.id);
   if (documentMode && documentMode !== "AUTO_SEND") {
@@ -450,13 +492,13 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
             : "The document needs approval before a quotation is sent.",
       },
     });
-    return;
+    return respond({ planKind: "QUOTE", planSend: true, salesAction: "AUTO_SEND", documentBlocksAutoSend: true, catalogueProductNamed: true });
   }
   if (!notify) {
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: plan.note } });
-    return;
+    return none;
   }
-  await sendQuote({ userId: "system", workspaceId: workspace.id }, rfq.id, { validDays: 14, notes: draft.notes });
+  return { ...respond({ planKind: "QUOTE", planSend: true, salesAction: "AUTO_SEND" }, draft.id), quoteNotes: draft.notes };
 }
 
 export async function sourcingPools(workspaceId: string): Promise<SourcingPools> {
@@ -711,12 +753,59 @@ async function storeParsedRequirement(rfq: { id: string; lines: { id: string; sp
   }
 }
 
-async function sendSourcingReply(rfq: { workspaceId: string; sourceMessageId: string; subject: string; automationNote: string; sourceMessage: { fromEmail: string | null } }, message: string) {
-  if (!rfq.sourceMessage.fromEmail || rfq.automationNote === message) return;
-  await sendThreadReply(
-    { userId: "system", workspaceId: rfq.workspaceId },
-    { messageId: rfq.sourceMessageId, to: rfq.sourceMessage.fromEmail, cc: "", subject: replySubject(rfq.subject), body: message },
-  );
+function processingStore(workspaceId: string, messageId: string): ProcessingStore {
+  const db = getDb();
+  return {
+    async insert(row: ProcessingRow) {
+      try {
+        await db.inboundMessageProcessing.create({
+          data: {
+            workspaceId,
+            messageId,
+            gmailMessageId: row.gmailMessageId,
+            threadId: row.threadId,
+            processingStatus: row.processingStatus,
+            decision: row.decision,
+            autoReplyType: row.autoReplyType,
+            quoteId: row.quoteId,
+          },
+        });
+        return "inserted";
+      } catch (error) {
+        if (isUniqueViolation(error)) return "exists";
+        throw error;
+      }
+    },
+    async read(gmailMessageId) {
+      const row = await db.inboundMessageProcessing.findUnique({ where: { gmailMessageId } });
+      if (!row) return null;
+      return {
+        gmailMessageId: row.gmailMessageId,
+        threadId: row.threadId,
+        processingStatus: row.processingStatus as ProcessingRow["processingStatus"],
+        decision: row.decision,
+        autoReplyType: row.autoReplyType,
+        autoReplySentAt: row.autoReplySentAt?.toISOString() ?? null,
+        quoteId: row.quoteId,
+        processedAt: row.processedAt?.toISOString() ?? null,
+      };
+    },
+    async save(gmailMessageId, from, row) {
+      const updated = await db.inboundMessageProcessing.updateMany({
+        where: { gmailMessageId, processingStatus: from },
+        data: {
+          threadId: row.threadId,
+          processingStatus: row.processingStatus,
+          decision: row.decision,
+          autoReplyType: row.autoReplyType,
+          autoReplySentAt: row.autoReplySentAt ? new Date(row.autoReplySentAt) : null,
+          quoteId: row.quoteId,
+          processedAt: row.processedAt ? new Date(row.processedAt) : null,
+        },
+      });
+      return updated.count === 1;
+    },
+  };
 }
 
 function reviewNote(decisions: PriceDecision[]) {

@@ -194,6 +194,7 @@ model Workspace {
   sourcingTasks     SourcingTask[]
   attachments       StoredAttachment[]
   tenderAnalyses    TenderAnalysis[]
+  inboundProcessing InboundMessageProcessing[]
 }
 
 model Membership {
@@ -969,4 +970,24 @@ model DocumentEdit {
   analysis TenderAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
 
   @@index([analysisId])
+}
+
+model InboundMessageProcessing {
+  id               String    @id @default(cuid())
+  workspaceId      String
+  messageId        String    @default("")
+  gmailMessageId   String    @unique
+  threadId         String    @default("")
+  processingStatus String    @default("CLAIMED")
+  decision         String    @default("")
+  autoReplyType    String    @default("")
+  autoReplySentAt  DateTime?
+  quoteId          String    @default("")
+  processedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, processingStatus])
 }
