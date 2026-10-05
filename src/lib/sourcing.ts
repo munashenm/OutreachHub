@@ -152,7 +152,16 @@ export function extractProductRequirements(body: string): ProductRequirement[] {
     if (current.length > 0) current.push(line);
   }
   flush();
-  return groups.map((group) => requirementFromText(group.join("\n"))).filter((item) => item.quantity != null || item.model || item.sku || item.productType);
+  return groups.map((group) => requirementFromText(group.join("\n"))).filter(requirementIsUseful);
+}
+
+export function parseRequirementFragment(text: string): ProductRequirement | null {
+  const requirement = requirementFromText(text);
+  return requirementIsUseful(requirement) ? requirement : null;
+}
+
+function requirementIsUseful(item: ProductRequirement) {
+  return item.quantity != null || Boolean(item.model || item.sku || item.productType);
 }
 
 export function requirementSummary(requirement: ProductRequirement) {

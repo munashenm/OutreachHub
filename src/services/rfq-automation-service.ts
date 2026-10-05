@@ -22,13 +22,15 @@ import { chooseSupplierOffer, priceChangeNeedsApproval } from "../lib/supplier-c
 import { recordActivity } from "./activity-service";
 import { extractQuotationFields } from "./ai-service";
 import { sendQuote } from "./quote-service";
-import { sendThreadReply } from "./reply-service";
+import { sendCustomerResponse } from "./reply-service";
 import { extractProductRequirements, planSourcing, QUANTITY_CLARIFICATION, requirementAwaitingQuantity, requirementSummary, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
 import { sourceExternalForRequirements } from "./external-sourcing-service";
 import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp, unpricedCatalogueNote } from "./sales-response-service";
 import { analyseRfqDocuments, analysisTextForRfq, listTenderAnalyses, responseModeForRfq, saveAnalysisMatches } from "./document-analysis-service";
 import { matchRequestedSpecification, UNPRICED_LINE, type AnalysisMatch } from "../lib/document-analysis";
 import { determineInitialResponse, sendResponseOnce, type InitialResponse, type ProcessingRow, type ProcessingStore, type ResponseFacts } from "../lib/inbound-response";
+import { analyzeInboundEmail, clarificationFromAnalysis, parseRfqAnalysis, quotationSendPermission, rankSuppliedMatches, type RfqAnalysis } from "../lib/ai/rfq-analyzer";
+import { requirementsForSourcing } from "../lib/ai/rfq-requirements";
 
 const BATCH = 15;
 
@@ -107,7 +109,7 @@ async function processInboundMessage(messageId: string) {
     if (!delivery.blocked || delivery.finished) await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
     return delivery.blocked ? "already-replied" : kind;
   }
-  const rfq = existing ?? await createRfq(message);
+  const rfq = existing ?? await createRfq(message, await analyzeInboundEmail({ subject: message.subject, body: message.body }));
   const documentMode = await analyseRfqDocuments(message.workspaceId, rfq.id);
   const outcome = documentMode === "TENDER_PACKAGE"
     ? await quoteRfq(rfq.id, workspace, { notify: false })
@@ -125,7 +127,7 @@ async function processInboundMessage(messageId: string) {
         await sendQuote({ userId: "system", workspaceId: message.workspaceId }, rfq.id, { validDays: 14, notes: outcome.quoteNotes });
         return;
       }
-      await sendThreadReply(
+      await sendCustomerResponse(
         { userId: "system", workspaceId: message.workspaceId },
         { messageId: message.id, to: message.fromEmail, cc: "", subject: replySubject(message.subject), body: outcome.message },
       );
@@ -173,7 +175,7 @@ async function handleQuoteReply(message: { id: string; workspaceId: string; body
         response: { decision: "NEEDS_CLARIFICATION", autoReplyType: "CLARIFICATION", message: reply },
         store: processingStore(message.workspaceId, message.id),
         send: async () => {
-          await sendThreadReply(
+          await sendCustomerResponse(
             { userId: "system", workspaceId: message.workspaceId },
             { messageId: message.id, to: message.fromEmail ?? "", cc: "", subject: replySubject(message.subject), body: reply },
           );
@@ -194,9 +196,22 @@ async function handleQuoteReply(message: { id: string; workspaceId: string; body
   if (!delivery.blocked || delivery.finished) await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
 }
 
-async function extractInboundRfq(body: string) {
+async function extractInboundRfq(body: string, analysis: RfqAnalysis | null) {
   const extracted = extractRfqRequest(body);
   if (extracted.lines.length > 0) return extracted;
+  if (analysis) {
+    return mergeRfqExtraction(extracted, groundAiRfqExtraction({
+      lines: analysis.items.map((item) => ({
+        description: item.description,
+        quantity: item.quantity,
+        manufacturer: item.brand,
+        model: item.model,
+        sku: item.sku,
+        manufacturerPartNumber: item.mpn,
+        specifications: item.specifications.join(", "),
+      })),
+    }, body));
+  }
   try {
     const raw = await extractQuotationFields(body);
     if (!raw) return extracted;
@@ -206,8 +221,8 @@ async function extractInboundRfq(body: string) {
   }
 }
 
-async function createRfq(message: { id: string; workspaceId: string; subject: string; body: string; fromEmail: string | null; fromName: string | null; prospectId: string | null }) {
-  const extracted = await extractInboundRfq(message.body);
+async function createRfq(message: { id: string; workspaceId: string; subject: string; body: string; fromEmail: string | null; fromName: string | null; prospectId: string | null }, analysis: RfqAnalysis | null) {
+  const extracted = await extractInboundRfq(message.body, analysis);
   const email = extracted.email || message.fromEmail || "";
   const prospect = message.prospectId
     ? await getDb().prospect.findFirst({ where: { id: message.prospectId, workspaceId: message.workspaceId }, select: { id: true, companyId: true } })
@@ -227,14 +242,17 @@ async function createRfq(message: { id: string; workspaceId: string; subject: st
         deliveryLocation: extracted.deliveryLocation,
         requiredDate: extracted.requiredDate,
         notes: [extracted.customerName, extracted.companyName].filter(Boolean).join(", "),
-        enquiryJson: enquiryFromRequest({
-          intent: classifyInbound({ subject: message.subject, body: message.body, campaignReply: false }),
-          customerName: extracted.customerName,
-          companyName: extracted.companyName,
-          email,
-          reference: extracted.reference,
-          requirements: extractProductRequirements(`${message.subject}\n${message.body}`),
-        }),
+        enquiryJson: {
+          ...enquiryFromRequest({
+            intent: classifyInbound({ subject: message.subject, body: message.body, campaignReply: false }),
+            customerName: extracted.customerName,
+            companyName: extracted.companyName,
+            email,
+            reference: extracted.reference,
+            requirements: extractProductRequirements(`${message.subject}\n${message.body}`),
+          }) as Record<string, unknown>,
+          ...(analysis ? { ai: analysis } : {}),
+        },
         lines: {
           create: extracted.lines.map((line) => ({
             workspaceId: message.workspaceId,
@@ -356,8 +374,9 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     include: { lines: true, quotes: true, sourceMessage: true },
   });
   if (!rfq || rfq.quotes.some((quote) => quote.status === "SENT")) return none;
+  const analysis = await rememberAiInterpretation(rfq);
   const documentText = await analysisTextForRfq(rfq.id);
-  const requirements = extractProductRequirements(`${documentText}\n${rfq.sourceMessage?.subject ?? rfq.subject}\n${rfq.sourceMessage?.body || rfq.description}`.trim());
+  const requirements = requirementsForSourcing(`${documentText}\n${rfq.sourceMessage?.subject ?? rfq.subject}\n${rfq.sourceMessage?.body || rfq.description}`.trim(), analysis);
   await storeParsedRequirement(rfq, requirements[0], workspace.id);
   const margins = {
     minimumMarginPercent: workspace.minimumMarginPercent,
@@ -428,7 +447,8 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: plan.note } });
     return respond({ planKind: "STAFF_REVIEW" });
   }
-  const recommended = plan.options[0];
+  const rankedOptions = analysis ? rankSuppliedMatches(analysis.items, plan.options) : plan.options;
+  const recommended = rankedOptions[0];
   if (recommended && rfq.lines[0]) {
     await db.rfqLine.update({
       where: { id: rfq.lines[0].id },
@@ -447,13 +467,13 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   let draft = rfq.quotes.find((quote) => quote.status === "DRAFT");
   if (!draft) {
     draft = await db.quote.create({ data: { workspaceId: workspace.id, rfqId: rfq.id, confidenceScore: sales?.confidence ?? 0, notes: rfq.customerReference ? `Customer reference ${rfq.customerReference}` : "" } });
-    for (const [index, option] of plan.options.entries()) {
+    for (const [index, option] of rankedOptions.entries()) {
       await db.quoteLine.create({
         data: {
           workspaceId: workspace.id,
           quoteId: draft.id,
           productId: option.productId,
-          description: plan.options.length > 1 ? `Option ${index + 1} — ${option.role}: ${option.name}` : option.name,
+          description: rankedOptions.length > 1 ? `Option ${index + 1} — ${option.role}: ${option.name}` : option.name,
           quantity: new Prisma.Decimal(option.quantity.toFixed(2)),
           unitPriceCents: option.unitPriceCents,
           specifications: option.specifications,
@@ -498,7 +518,45 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "READY_TO_QUOTE", automationNote: plan.note } });
     return none;
   }
+  const permission = quotationSendPermission({ verifiedAutoSend: true, analysis });
+  if (permission === "CLARIFY" && analysis) {
+    const message = clarificationFromAnalysis(analysis);
+    if (message) {
+      await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_INFORMATION", automationNote: "The request needs the missing information before a quotation can be sent." } });
+      return respond({ planKind: "CLARIFICATION", planMessage: message });
+    }
+  }
+  if (permission !== "EXISTING" && permission !== "SEND") {
+    await db.rfq.update({
+      where: { id: rfq.id },
+      data: {
+        status: "REVIEWING",
+        automationNote: permission === "REVIEW"
+          ? "A draft quotation is waiting for review. It was not emailed."
+          : "The enquiry needs a person to review it before any quotation is emailed.",
+      },
+    });
+    return none;
+  }
   return { ...respond({ planKind: "QUOTE", planSend: true, salesAction: "AUTO_SEND" }, draft.id), quoteNotes: draft.notes };
+}
+
+async function rememberAiInterpretation(rfq: { id: string; subject: string; description: string; enquiryJson: unknown; sourceMessage: { subject: string; body: string } | null }) {
+  const stored = storedAnalysis(rfq.enquiryJson);
+  if (stored) return stored;
+  const analysis = await analyzeInboundEmail({
+    subject: rfq.sourceMessage?.subject ?? rfq.subject,
+    body: rfq.sourceMessage?.body || rfq.description,
+  });
+  if (!analysis) return null;
+  const base = rfq.enquiryJson && typeof rfq.enquiryJson === "object" && !Array.isArray(rfq.enquiryJson) ? rfq.enquiryJson as Record<string, unknown> : {};
+  await getDb().rfq.update({ where: { id: rfq.id }, data: { enquiryJson: { ...base, ai: analysis } } });
+  return analysis;
+}
+
+function storedAnalysis(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return parseRfqAnalysis((value as Record<string, unknown>).ai);
 }
 
 export async function sourcingPools(workspaceId: string): Promise<SourcingPools> {

@@ -15,7 +15,7 @@ import {
 import type { ProductRequirement, SourcingCandidate } from "../lib/sourcing";
 import { formatQuoteDate, lineTotalCents } from "../lib/quote";
 import { quotationEmailSubject, urbanFocusQuoteNumber } from "../lib/quotation-document";
-import { sendThreadReply } from "./reply-service";
+import { sendCustomerResponse } from "./reply-service";
 
 export { unpricedCatalogueNote };
 
@@ -154,7 +154,7 @@ export async function processQuoteFollowUps() {
     if (action !== "send" || !quote.rfq.sourceMessage.fromEmail || quote.number == null || quote.issuedAt == null) continue;
     const quoteNumber = urbanFocusQuoteNumber(quote.number, quote.issuedAt);
     const validUntil = quote.validUntil ? formatQuoteDate(quote.validUntil) : "";
-    await sendThreadReply(
+    await sendCustomerResponse(
       { userId: "system", workspaceId: quote.workspaceId },
       {
         messageId: quote.rfq.sourceMessageId,
