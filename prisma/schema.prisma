@@ -642,6 +642,11 @@ enum SupplierVatMode {
   EXCLUSIVE
 }
 
+enum SupplierImportStatus {
+  COMPLETED
+  FAILED
+}
+
 model Supplier {
   id          String   @id @default(cuid())
   workspaceId String
@@ -674,6 +679,7 @@ model Supplier {
   workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   prices    SupplierPrice[]
   feedItems SupplierFeedItem[]
+  imports   SupplierImport[]
 
   @@index([workspaceId])
 }
@@ -695,6 +701,9 @@ model SupplierFeedItem {
   costKnown              Boolean  @default(false)
   stockQty               Int      @default(0)
   stockKnown             Boolean  @default(false)
+  barcode                String   @default("")
+  productUrl             String   @default("")
+  lastSeenAt             DateTime?
   productId              String?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
@@ -705,6 +714,26 @@ model SupplierFeedItem {
   @@unique([supplierId, supplierSku])
   @@index([workspaceId])
   @@index([productId])
+}
+
+model SupplierImport {
+  id           String               @id @default(cuid())
+  workspaceId  String
+  supplierId   String
+  filename     String
+  uploadedAt   DateTime             @default(now())
+  rowsRead     Int                  @default(0)
+  rowsCreated  Int                  @default(0)
+  rowsUpdated  Int                  @default(0)
+  rowsRejected Int                  @default(0)
+  status       SupplierImportStatus
+  errorMessage String               @default("")
+  rejections   Json                 @default("[]")
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([supplierId, uploadedAt])
 }
 
 model SupplierPrice {

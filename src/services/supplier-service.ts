@@ -11,7 +11,7 @@ import type { Actor } from "./types";
 export async function listSuppliers(workspaceId: string) {
   return getDb().supplier.findMany({
     where: { workspaceId },
-    include: { _count: { select: { prices: true } } },
+    include: { _count: { select: { prices: true, feedItems: true } } },
     orderBy: { name: "asc" },
   });
 }
@@ -23,7 +23,11 @@ export async function getSupplier(workspaceId: string, id: string) {
       prices: {
         include: { product: { select: { id: true, sku: true, name: true, unitPriceCents: true, currency: true } } },
         orderBy: { updatedAt: "desc" },
+        take: 100,
       },
+      feedItems: { orderBy: { updatedAt: "desc" }, take: 100 },
+      imports: { orderBy: { uploadedAt: "desc" }, take: 30 },
+      _count: { select: { feedItems: true } },
     },
   });
 }

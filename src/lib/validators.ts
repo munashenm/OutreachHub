@@ -214,6 +214,9 @@ export const supplierFeedSchema = z.object({
   mapImages: z.string().trim().max(80).optional().default(""),
   mapCategory: z.string().trim().max(80).optional().default(""),
   mapLeadTime: z.string().trim().max(80).optional().default(""),
+  mapBarcode: z.string().trim().max(80).optional().default(""),
+  mapProductUrl: z.string().trim().max(80).optional().default(""),
+  mapCostIncl: z.string().trim().max(80).optional().default(""),
 });
 
 export const storeConnectionSchema = z.object({

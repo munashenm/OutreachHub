@@ -5,7 +5,7 @@ import type { ActionState } from "@/lib/format";
 import { runAction } from "@/lib/run-action";
 import { fieldErrors, readForm, storeConnectionSchema, supplierFeedSchema } from "@/lib/validators";
 import { requireSession } from "@/services/auth-service";
-import { pushStoreStock, saveStoreConnection, saveSupplierFeed, syncSupplierFeed, testStoreConnection } from "@/services/stock-sync-service";
+import { pushStoreStock, saveStoreConnection, saveSupplierFeed, syncSupplierFeed, testStoreConnection, testSupplierFeed } from "@/services/stock-sync-service";
 
 function actor(session: Awaited<ReturnType<typeof requireSession>>) {
   return { userId: session.user.id, workspaceId: session.workspace.id };
@@ -19,6 +19,14 @@ export async function saveSupplierFeedAction(_prev: ActionState, formData: FormD
     await saveSupplierFeed(actor(session), parsed.data);
     revalidatePath(`/suppliers/${parsed.data.supplierId}`);
     return { success: "Stock feed saved." };
+  });
+}
+
+export async function testSupplierFeedAction(supplierId: string): Promise<ActionState> {
+  return runAction(async () => {
+    const session = await requireSession();
+    const result = await testSupplierFeed(actor(session), supplierId);
+    return { success: `The feed returned ${result.products} products. Nothing was saved.` };
   });
 }
 

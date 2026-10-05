@@ -29,6 +29,8 @@ import {
   type SupplierOffer,
 } from "../lib/supplier-connector";
 import { frontosaFeedUrls, frontosaTokenFromUrl, isFrontosaFeed, joinFrontosaFeeds, redactSecrets } from "../lib/frontosa";
+import { distributorKey } from "../lib/distributors";
+import { findSupplierItem } from "../lib/supplier-file";
 import { isScoopFeedUrl, isScoopPriceList, parseScoopPriceList } from "../lib/scoop";
 import { decryptSecret, encryptSecret } from "../lib/token-crypto";
 import { recordActivity } from "./activity-service";
@@ -68,6 +70,9 @@ type FeedSettings = {
   mapImages: string;
   mapCategory: string;
   mapLeadTime: string;
+  mapBarcode: string;
+  mapProductUrl: string;
+  mapCostIncl: string;
 };
 
 export async function saveSupplierFeed(actor: Actor, input: FeedSettings) {
@@ -90,12 +95,13 @@ export async function saveSupplierFeed(actor: Actor, input: FeedSettings) {
   const username = input.authUsername.trim();
   const hasSecret = Boolean(token || password || username);
   const stockFeedKeyEncrypted = !url || !hasSecret ? null : sealKey(JSON.stringify({ token, username, password }));
+  const manualActive = supplier.feedEnabled && !supplier.stockFeedUrl;
   await getDb().supplier.update({
     where: { id: supplier.id },
     data: {
       markupPercent: input.markupPercent,
       feedType: input.feedType,
-      feedEnabled: Boolean(url),
+      feedEnabled: Boolean(url) || (!url && manualActive),
       stockFeedUrl: url || null,
       authType: input.authType,
       authHeaderName: headerName,
@@ -731,6 +737,14 @@ async function lowestCostByProduct(workspaceId: string, productIds: string[]) {
   return costs;
 }
 
+export async function testSupplierFeed(actor: Actor, supplierId: string) {
+  const supplier = await ownedSupplier(actor.workspaceId, supplierId);
+  if (supplier.feedType === "MANUAL_CSV" || !supplier.stockFeedUrl) throw new AppError("Add the supplier feed address first.");
+  const parsed = await readFeed(supplier);
+  if (parsed.error) throw new AppError(parsed.error);
+  return { products: parsed.offers.length };
+}
+
 export async function saveSupplierOffers(
   actor: Actor,
   supplierId: string,
@@ -906,9 +920,15 @@ async function applyFeed(
 async function rememberFeedItems(workspaceId: string, supplierId: string, offers: SupplierOffer[], matched: Map<string, SupplierOffer>) {
   const productIdBySku = new Map<string, string>();
   for (const [productId, offer] of matched) productIdBySku.set(offer.supplierSku.toLowerCase(), productId);
+  const existing = await getDb().supplierFeedItem.findMany({
+    where: { supplierId },
+    select: { id: true, supplierSku: true, manufacturerPartNumber: true, barcode: true },
+  });
+  const known = existing.map((item) => ({ ...item }));
+  const seenAt = new Date();
   for (const offer of offers) {
     const supplierSku = offer.supplierSku.trim();
-    if (!supplierSku) continue;
+    if (!supplierSku && !offer.manufacturerPartNumber.trim() && !(offer.barcode ?? "").trim()) continue;
     const productId = productIdBySku.get(supplierSku.toLowerCase()) ?? null;
     const data = {
       manufacturerPartNumber: offer.manufacturerPartNumber,
@@ -923,13 +943,27 @@ async function rememberFeedItems(workspaceId: string, supplierId: string, offers
       costKnown: offer.costCents != null,
       stockQty: offer.stockQty ?? 0,
       stockKnown: offer.stockQty != null,
+      barcode: offer.barcode ?? "",
+      productUrl: offer.productUrl ?? "",
+      lastSeenAt: seenAt,
       productId,
     };
-    await getDb().supplierFeedItem.upsert({
-      where: { supplierId_supplierSku: { supplierId, supplierSku } },
-      update: data,
-      create: { workspaceId, supplierId, supplierSku, ...data },
+    const found = findSupplierItem(known, offer);
+    if (found) {
+      const nextSku = supplierSku || found.supplierSku;
+      const taken = known.some((item) => item.id !== found.id && item.supplierSku.toLowerCase() === nextSku.toLowerCase());
+      const sku = taken ? found.supplierSku : nextSku;
+      await getDb().supplierFeedItem.update({ where: { id: found.id }, data: { ...data, supplierSku: sku } });
+      found.supplierSku = sku;
+      found.manufacturerPartNumber = offer.manufacturerPartNumber;
+      found.barcode = offer.barcode ?? "";
+      continue;
+    }
+    if (!supplierSku) continue;
+    const created = await getDb().supplierFeedItem.create({
+      data: { workspaceId, supplierId, supplierSku, ...data },
     });
+    known.push({ id: created.id, supplierSku, manufacturerPartNumber: offer.manufacturerPartNumber, barcode: offer.barcode ?? "" });
   }
 }
 
@@ -1170,6 +1204,7 @@ async function fetchFrontosa(url: string) {
 }
 
 async function readFeed(supplier: {
+  name: string;
   stockFeedUrl: string | null;
   feedType: "JSON" | "XML" | "CSV_URL" | "MANUAL_CSV";
   authType: "NONE" | "BEARER" | "API_KEY_HEADER" | "BASIC";
@@ -1196,7 +1231,8 @@ async function readFeed(supplier: {
   const text = await response.text();
   if (text.length > 5_000_000) throw new AppError("The supplier feed is too large.");
   const mapping = readFieldMapping(supplier.fieldMapping);
-  const scoop = isScoopPriceList(text) || (isScoopFeedUrl(supplier.stockFeedUrl) && !text.trim().startsWith("{") && !text.trim().startsWith("["));
+  const scoopSupplier = distributorKey(supplier.name) === "scoop" || isScoopFeedUrl(supplier.stockFeedUrl);
+  const scoop = scoopSupplier && (isScoopPriceList(text) || isScoopFeedUrl(supplier.stockFeedUrl));
   const parsed = scoop
     ? parseScoopPriceList(text)
     : supplier.feedType === "XML"
@@ -1276,6 +1312,9 @@ function mappingFromInput(input: FeedSettings): SupplierFieldMapping {
   assign("imageUrls", input.mapImages);
   assign("category", input.mapCategory);
   assign("leadTimeDays", input.mapLeadTime);
+  assign("barcode", input.mapBarcode);
+  assign("productUrl", input.mapProductUrl);
+  assign("costInclusive", input.mapCostIncl);
   return mapping;
 }
 
