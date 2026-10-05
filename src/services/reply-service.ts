@@ -1,5 +1,6 @@
 import { getDb } from "../lib/db";
 import { AppError } from "../lib/errors";
+import { urbanFocusLogoInline, withClientSignature } from "../lib/email-signature";
 import { replyTargets } from "../lib/gmail-message";
 import { ownedByWorkspace } from "../lib/gmail-sync";
 import { fullName } from "../lib/format";
@@ -46,15 +47,19 @@ export async function sendThreadReply(actor: Actor, input: { messageId: string; 
     fromEmail: input.to,
   });
   const access = await accessTokenForMailbox(mailbox.id, actor.workspaceId);
+  const signed = withClientSignature(input.body);
+  const logo = urbanFocusLogoInline();
   const sent = await sendGmailMessage(access.token, {
     from: access.email,
     to: input.to,
     cc: input.cc || undefined,
     subject: input.subject,
-    body: input.body,
+    body: signed.body,
+    html: signed.html,
     threadId: target.threadId,
     inReplyTo: target.inReplyTo,
     attachments: input.attachments,
+    inlineImages: logo ? [logo] : undefined,
   });
   const saved = await getDb().$transaction(async (tx) => {
     const message = await tx.message.create({
@@ -63,8 +68,8 @@ export async function sendThreadReply(actor: Actor, input: { messageId: string; 
         direction: "OUTBOUND",
         status: "SENT",
         subject: input.subject,
-        body: input.body,
-        snippet: input.body.slice(0, 180),
+        body: signed.body,
+        snippet: signed.body.slice(0, 180),
         fromEmail: access.email,
         externalId: sent.id,
         threadId: sent.threadId,

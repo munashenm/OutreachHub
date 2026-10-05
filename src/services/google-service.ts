@@ -160,6 +160,7 @@ export type OutboundMail = {
   threadId?: string | null;
   inReplyTo?: string | null;
   attachments?: { filename: string; contentType: string; data: Buffer }[];
+  inlineImages?: { cid: string; filename: string; contentType: string; data: Buffer }[];
 };
 
 export async function sendGmailMessage(accessToken: string, input: OutboundMail) {
