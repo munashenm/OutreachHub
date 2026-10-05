@@ -3,7 +3,7 @@ import { getDb } from "../lib/db";
 import { AppError } from "../lib/errors";
 import { parseMoneyToCents, parseQuantity, quoteValidUntil, snapshotQuoteLine } from "../lib/quote";
 import { quoteMarginBlock, sellMarginPercent } from "../lib/stock";
-import { quoteCoverEmail, urbanFocusQuoteNumber } from "../lib/quotation-document";
+import { quoteCoverEmail, quotationEmailSubject, urbanFocusQuoteNumber } from "../lib/quotation-document";
 import { ownedByWorkspace } from "../lib/gmail-sync";
 import { recordActivity } from "./activity-service";
 import { getRfq } from "./rfq-service";
@@ -189,7 +189,7 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
     messageId: rfq.sourceMessageId,
     to,
     cc: "",
-    subject: rfq.subject.toLowerCase().startsWith("re:") ? rfq.subject : `Re: ${rfq.subject}`,
+    subject: quotationEmailSubject(quoteNumber, quoteIssuedAt),
     body,
     attachments: [{ filename: pdf.filename, contentType: "application/pdf", data: pdf.bytes }],
   });

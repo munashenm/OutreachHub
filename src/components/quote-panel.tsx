@@ -4,6 +4,7 @@ import { useActionState, useState } from "react";
 import { addQuoteLineAction, removeQuoteLineAction, sendQuoteAction } from "@/actions/quote-actions";
 import { Field, buttonPrimary, buttonSecondary, inputClass, textAreaClass } from "@/components/ui";
 import { formatCents, formatQuoteEmail, lineTotalCents, parseMoneyToCents, quoteTotalCents } from "@/lib/quote";
+import { urbanFocusQuoteNumber } from "@/lib/quotation-document";
 import { linesExceedingStock, quoteMarginBlock, sellMarginPercent } from "@/lib/stock";
 import { initialActionState } from "@/lib/format";
 
@@ -23,6 +24,8 @@ export function QuotePanel({
   minimumMarginPercent,
   autoSendMarginPercent,
   emailBlocked = "",
+  quoteNumber = null,
+  issuedAt = null,
 }: {
   rfqId: string;
   quoteId: string | null;
@@ -36,6 +39,8 @@ export function QuotePanel({
   minimumMarginPercent: number;
   autoSendMarginPercent: number;
   emailBlocked?: string;
+  quoteNumber?: number | null;
+  issuedAt?: string | null;
 }) {
   const [state, formAction, pending] = useActionState(addQuoteLineAction, initialActionState);
   const [productId, setProductId] = useState("");
@@ -63,9 +68,13 @@ export function QuotePanel({
   const shortNames = products.filter((product) => shortProductIds.has(product.id)).map((product) => product.sku);
   const total = quoteTotalCents(lines.map((line) => ({ quantity: Number(line.quantity), unitPriceCents: line.unitPriceCents })));
   const pdfQuery = `mode=${documentMode}&export=${exportQuote ? "1" : "0"}`;
+  const issued = issuedAt ? new Date(issuedAt) : null;
+  const quotationNumber = quoteNumber != null && issued ? urbanFocusQuoteNumber(quoteNumber, issued) : "";
   const preview = lines.length === 0 ? "" : formatQuoteEmail({
     subject,
     currency,
+    number: quoteNumber,
+    issuedAt: issued ?? undefined,
     validDays: Number(validDays),
     customerName,
     companyName,
@@ -81,6 +90,7 @@ export function QuotePanel({
 
   return (
     <div className="space-y-4">
+      {quotationNumber ? <p className="text-sm font-medium">Quotation No: {quotationNumber}</p> : null}
       {lines.length === 0 ? <p className="text-sm text-muted">No quote lines yet. Choose a catalogue product or type a line.</p> : (
         <table className="data-table">
           <thead><tr><th>Description</th><th>Qty</th><th>Unit</th><th>Total</th><th></th></tr></thead>
@@ -196,7 +206,6 @@ export function QuotePanel({
             <p className="flex flex-wrap gap-3 text-sm">
               <a className="text-accent" href={`/api/quotes/${quoteId}/pdf?${pdfQuery}`} target="_blank" rel="noreferrer">Preview PDF</a>
               <a className="text-accent" href={`/api/quotes/${quoteId}/pdf?${pdfQuery}&download=1`}>Download PDF</a>
-              <a className="text-accent" href={`/api/quotes/${quoteId}/pdf?${pdfQuery}&download=1`} target="_blank" rel="noreferrer">Regenerate Draft PDF</a>
             </p>
           ) : null}
           {sendMessage ? <p className="text-sm text-muted">{sendMessage}</p> : null}

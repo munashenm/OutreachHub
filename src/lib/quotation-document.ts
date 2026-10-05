@@ -1,4 +1,23 @@
-import { formatCents, formatQuoteDate, formatQuoteNumber, lineTotalCents, quoteTotalCents } from "./quote";
+import { formatCents, formatQuoteDate, lineTotalCents, quoteTotalCents, urbanFocusQuoteNumber } from "./quote";
+
+export { urbanFocusQuoteNumber };
+
+export const QUOTATION_AVAILABILITY = "Subject to stock at time of order.";
+export const QUOTATION_CUSTOMER_MESSAGE = "Thank you for the opportunity to quote. Please use the quotation number as your payment and correspondence reference.";
+
+export const QUOTATION_TERMS: Array<{ label: string; text: string }> = [
+  { label: "Warranty", text: "All new hardware products supplied by Urban Focus carry a minimum 12-month warranty from the date of delivery unless a longer manufacturer warranty is stated on the quotation or product documentation. The warranty covers manufacturing defects under normal use. It does not cover accidental damage, misuse, liquid damage, electrical surges, physical damage, unauthorised repairs, or damage resulting from improper installation or operation." },
+  { label: "Returns & Exchanges", text: "Returns must be authorised by Urban Focus before goods are returned. Standard stocked products may be considered for return where they are unused, unopened, in their original packaging and in resalable condition. Special-order, customised, configured, licensed, activated or specifically sourced products may not be returnable unless defective or incorrectly supplied. Approved returns may be subject to applicable collection, delivery or restocking costs. Defective or incorrectly supplied goods will be handled in accordance with the applicable warranty and South African consumer law." },
+  { label: "Order Acceptance", text: "A purchase order, written acceptance, or payment against this quotation constitutes acceptance of the quoted products, pricing and commercial terms." },
+  { label: "Pricing and Stock", text: "Prices and availability are subject to confirmation at the time the order is placed. If supplier pricing or availability changes before acceptance, Urban Focus may issue a revised quotation before processing the order." },
+  { label: "Delivery", text: "Delivery charges are excluded unless specifically listed in the quotation. Delivery dates are estimates and are confirmed after payment or order acceptance and stock confirmation." },
+  { label: "Product Substitution", text: "Urban Focus will not substitute a quoted product without informing the customer. Where the exact product becomes unavailable, an equivalent or better alternative may be proposed for customer approval." },
+  { label: "Payment Terms", text: "Payment is due before dispatch unless approved written credit terms exist. Goods remain the property of Urban Focus until payment has been received in full." },
+  { label: "Quotation Validity", text: "This quotation is valid until the stated expiry date and may be revised thereafter due to changes in supplier pricing, exchange rates, availability or other commercial factors." },
+  { label: "Errors and Omissions", text: "Urban Focus reserves the right to correct genuine typographical, calculation or pricing errors before an order is accepted." },
+  { label: "Software / Licensing", text: "Software licences, subscriptions, activation keys and digital products are subject to the relevant vendor's licensing terms and may be non-refundable once issued or activated." },
+  { label: "Taxes / Duties", text: "Prices are exclusive of VAT. VAT at 15% is added to the total." },
+];
 
 export const VAT_RATE = 15;
 
@@ -78,6 +97,8 @@ export type QuotationDocument = {
   banking: { bankName: string; accountName: string; accountNumber: string; branchCode: string; accountType: string; reference: string } | null;
   compliance: Array<{ item: string; requirement: string; proposed: string; status: ComplianceStatus }>;
   references: string[];
+  customerMessage: string;
+  availability: string;
 };
 
 export function defaultQuoteCompanySettings(): QuoteCompanySettings {
@@ -97,23 +118,23 @@ export function defaultQuoteCompanySettings(): QuoteCompanySettings {
     accountType: "",
     availability: "Subject to stock at the time of order.",
     leadTime: "Lead time is confirmed when the order is placed.",
-    paymentTerms: "Payment is due before dispatch unless written credit terms already exist.",
-    validity: "This quotation is valid until the date shown above.",
-    delivery: "Delivery is to the stated address. Delivery charges are excluded unless a line includes them.",
+    paymentTerms: "Payment is due before dispatch unless approved written credit terms exist. Goods remain the property of Urban Focus until payment has been received in full.",
+    validity: "This quotation is valid until the stated expiry date and may be revised thereafter due to changes in supplier pricing, exchange rates, availability or other commercial factors.",
+    delivery: "Delivery charges are excluded unless specifically listed in the quotation. Delivery dates are estimates and are confirmed after payment or order acceptance and stock confirmation.",
     newGenuine: "The products quoted are new and genuine unless a line states otherwise.",
-    substitution: "A substitute is supplied only when this quotation names that substitute.",
+    substitution: "Urban Focus will not substitute a quoted product without informing the customer. Where the exact product becomes unavailable, an equivalent or better alternative may be proposed for customer approval.",
     taxes: "Prices are exclusive of VAT. VAT at 15% is added to the total.",
-    warranty: "The manufacturer warranty applies unless a line states a different warranty.",
+    warranty: "All new hardware products supplied by Urban Focus carry a minimum 12-month warranty from the date of delivery unless a longer manufacturer warranty is stated on the quotation or product documentation.",
     exportNote: "This quotation is prepared for export. Destination duties and taxes are excluded unless a line includes them.",
   };
 }
 
-export function urbanFocusQuoteNumber(sequence: number, issuedAt: Date) {
-  return `UF-${formatQuoteNumber(sequence, issuedAt)}`;
-}
-
 export function quotePdfFilename(sequence: number, issuedAt: Date) {
   return `${urbanFocusQuoteNumber(sequence, issuedAt)}.pdf`;
+}
+
+export function quotationEmailSubject(sequence: number, issuedAt: Date) {
+  return `Quotation ${urbanFocusQuoteNumber(sequence, issuedAt)}`;
 }
 
 export function quoteCoverEmail(input: { customerName: string; quoteNumber: string; validUntil: Date }) {
@@ -157,19 +178,12 @@ export function buildQuotationDocument(input: {
 }): QuotationDocument {
   const totals = quotationTotals(input.lines);
   if (!totals) throw new Error("The quotation totals could not be calculated.");
-  const numberLabel = input.sequence == null ? "Draft" : urbanFocusQuoteNumber(input.sequence, input.issuedAt);
-  const filename = input.sequence == null ? "UF-Q-DRAFT.pdf" : quotePdfFilename(input.sequence, input.issuedAt);
+  const numberLabel = input.sequence == null ? "" : urbanFocusQuoteNumber(input.sequence, input.issuedAt);
+  const filename = input.sequence == null ? "quotation.pdf" : quotePdfFilename(input.sequence, input.issuedAt);
   const company = { ...input.company, showVatNumber: input.company.showVatNumber && input.company.vatNumber.trim().length > 0 };
-  const terms = [
-    { label: "Availability / Lead Time", text: joinTerm(input.company.availability, input.company.leadTime) },
-    { label: "Payment Terms", text: input.company.paymentTerms },
-    { label: "Quotation Validity", text: input.company.validity },
-    { label: "Delivery", text: input.company.delivery },
-    { label: "New / Genuine", text: input.company.newGenuine },
-    { label: "Substitution", text: input.company.substitution },
-    { label: "Taxes / Duties", text: input.exportQuote ? `${input.company.taxes} ${input.company.exportNote}`.trim() : input.company.taxes },
-    { label: "Warranty", text: input.company.warranty },
-  ].filter((term) => term.text.length > 0);
+  const terms = QUOTATION_TERMS.map((term) => term.label === "Taxes / Duties" && input.exportQuote
+    ? { ...term, text: `${term.text} ${input.company.exportNote}`.trim() }
+    : term);
   const banking = company.showBanking && company.accountNumber.trim()
     ? {
         bankName: company.bankName,
@@ -213,6 +227,8 @@ export function buildQuotationDocument(input: {
     banking,
     compliance: input.mode === "FORMAL" ? input.lines.flatMap((line, index) => complianceForLine(line, index)) : [],
     references,
+    customerMessage: QUOTATION_CUSTOMER_MESSAGE,
+    availability: QUOTATION_AVAILABILITY,
   };
 }
 
@@ -226,10 +242,6 @@ export function documentContainsInternalPricing(document: QuotationDocument) {
     subject: document.subject,
   }).toLowerCase();
   return /\b(markup|margin|supplier cost|sourceurl|stockfeed)\b/.test(text);
-}
-
-function joinTerm(left: string, right: string) {
-  return [left.trim(), right.trim()].filter(Boolean).join(" ");
 }
 
 function shortConfiguration(value: string) {

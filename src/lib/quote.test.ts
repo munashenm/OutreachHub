@@ -30,7 +30,7 @@ test("formats a quotation email without marking it sent", () => {
     lines: [{ description: "24-port switch", quantity: 2, unitPriceCents: 250000 }],
   });
   assert.equal(formatQuoteNumber(7, issuedAt), "Q-2026-0007");
-  assert.match(body, /Quotation Q-2026-0007/);
+  assert.match(body, /Quotation No: UF-Q-20260929-0007/);
   assert.match(body, /Valid until 13 October 2026/);
   assert.match(body, /Jane Smith/);
   assert.match(body, /24-port switch/);
