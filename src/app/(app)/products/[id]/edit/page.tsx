@@ -4,7 +4,8 @@ import { ProductForm } from "@/components/product-form";
 import { ApplyPendingPriceButton } from "@/components/apply-pending-price";
 import { Notice, PageHeader, Panel } from "@/components/ui";
 import { firstParam } from "@/lib/format";
-import { formatCents, formatQuoteNumber } from "@/lib/quote";
+import { formatCents } from "@/lib/quote";
+import { urbanFocusQuoteNumber } from "@/lib/quotation-document";
 import { stockLeft } from "@/lib/stock";
 import { requireSession } from "@/services/auth-service";
 import { centsToInput, getProduct } from "@/services/product-service";
@@ -46,7 +47,7 @@ export default async function EditProductPage({
             {holds.quotes.map((line) => (
               <li key={line.id}>
                 <Link className="hover:underline" href={line.quote.number != null && line.quote.issuedAt ? `/quotes/${line.quote.id}` : `/rfqs/${line.quote.rfqId}`}>
-                  {line.quote.number != null && line.quote.issuedAt ? formatQuoteNumber(line.quote.number, line.quote.issuedAt) : "Quotation"}
+                  {line.quote.number != null && line.quote.issuedAt ? urbanFocusQuoteNumber(line.quote.number, line.quote.issuedAt) : "Quotation"}
                 </Link>
                 {" "}· {Number(line.quantity)} held
               </li>

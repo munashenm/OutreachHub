@@ -204,6 +204,15 @@ export type GmailFetchedMessage = {
   payload?: GmailPart;
 };
 
+export async function getGmailAttachment(accessToken: string, messageId: string, attachmentId: string) {
+  const response = await fetch(`${GMAIL}/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) return null;
+  const json = (await response.json()) as { data?: string };
+  return json.data ? Buffer.from(json.data, "base64url") : null;
+}
+
 export async function getGmailMessage(accessToken: string, id: string): Promise<GmailFetchedMessage | null> {
   const response = await fetch(`${GMAIL}/messages/${encodeURIComponent(id)}?format=full`, {
     headers: { Authorization: `Bearer ${accessToken}` },

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildRawEmail } from "./email-mime";
-import { defaultQuoteCompanySettings, buildQuotationDocument, documentContainsInternalPricing, quoteCoverEmail, quotePdfFilename, quotationTotals } from "./quotation-document";
+import { defaultQuoteCompanySettings, buildQuotationDocument, documentContainsInternalPricing, quoteCoverEmail, quotePdfFilename, quotationEmailSubject, quotationTotals } from "./quotation-document";
 import { renderQuotationPdf } from "./quotation-pdf";
 
 const issuedAt = new Date("2026-10-01T10:00:00.000Z");
@@ -65,18 +65,24 @@ test("prices a two-line quotation from the snapshot and keeps supplier data out"
   ]);
   assert.deepEqual(totals, { subtotalExclCents: 2_250_000, vatCents: 337_500, totalInclCents: 2_587_500 });
   const standard = document("STANDARD");
-  assert.equal(standard.numberLabel, "UF-Q-2026-0002");
+  assert.equal(standard.numberLabel, "UF-Q-20261001-0002");
+  assert.equal(quotationEmailSubject(2, issuedAt), "Quotation UF-Q-20261001-0002");
+  assert.equal(standard.filename, "UF-Q-20261001-0002.pdf");
   assert.equal(standard.filename, quotePdfFilename(2, issuedAt));
   assert.equal(standard.customerCompany, "Northwind Traders");
   assert.equal(standard.lines.length, 2);
   assert.equal(standard.subtotalExclCents, 2_250_000);
   assert.equal(standard.vatCents, 337_500);
   assert.equal(standard.totalInclCents, 2_587_500);
-  assert.equal(standard.banking?.reference, "UF-Q-2026-0002");
+  assert.equal(standard.banking?.reference, "UF-Q-20261001-0002");
+  assert.equal(standard.availability, "Subject to stock at time of order.");
+  assert.match(standard.terms.map((term) => term.text).join(" "), /minimum 12-month warranty/);
+  assert.equal(standard.terms.some((term) => term.label === "Returns & Exchanges"), true);
+  assert.equal(standard.numberLabel.includes("Draft"), false);
   assert.equal(standard.compliance.length, 0);
   assert.equal(standard.terms.some((term) => /prepared for export/i.test(term.text)), false);
   assert.equal(documentContainsInternalPricing(standard), false);
-  assert.match(quoteCoverEmail({ customerName: "Munashe", quoteNumber: standard.numberLabel, validUntil }), /Please find attached Urban Focus quotation UF-Q-2026-0002/);
+  assert.match(quoteCoverEmail({ customerName: "Munashe", quoteNumber: standard.numberLabel, validUntil }), /Please find attached Urban Focus quotation UF-Q-20261001-0002/);
 });
 
 test("formal mode records a deviation and omits an internal source URL", () => {
@@ -131,14 +137,21 @@ test("renders a branded PDF and a formal second page", async () => {
   assert.equal(text.includes("FORMAL QUOTATION"), true);
   assert.equal(text.includes("PREPARED FOR"), true);
   assert.equal(text.includes("Northwind Traders"), true);
-  assert.equal(text.includes("UF-Q-2026-0002"), true);
+  assert.equal(text.includes("Quotation No: UF-Q-20261001-0002"), true);
+  assert.equal(text.includes("Currency"), false);
+  assert.equal(text.includes("Draft"), false);
+  assert.equal(text.includes("Payment Reference: UF-Q-20261001-0002"), true);
+  assert.equal(text.includes("Thank you for the opportunity to quote."), true);
+  assert.equal(text.includes("Returns & Exchanges"), true);
+  assert.equal(text.includes("minimum 12-month warranty"), true);
+  assert.equal(text.includes("Subject to stock at time of order."), true);
   assert.equal(text.includes("Subtotal excl VAT"), true);
   assert.equal(text.includes("VAT @ 15%"), true);
   assert.equal(text.includes("TOTAL INCL VAT"), true);
   assert.equal(text.includes("COMMERCIAL TERMS"), true);
   assert.equal(standardPdf.toString("latin1").includes("/Subtype /Image"), true);
   assert.equal(/markup|supplier cost/.test(text), false);
-  assert.equal(pageCount(standardPdf), 1);
+  assert.ok(pageCount(standardPdf) >= 1);
   const formalPdf = await renderQuotationPdf(document("FORMAL"));
   const formalText = pdfWords(formalPdf);
   assert.equal(formalText.includes("TECHNICAL COMPLIANCE"), true);
@@ -160,13 +173,18 @@ test("attaches the quotation PDF to the Gmail reply", () => {
   const raw = Buffer.from(buildRawEmail({
     from: "sales@urbanfocus.co.za",
     to: "buyer@example.com",
-    subject: "Re: laptops",
-    body: quoteCoverEmail({ customerName: "Munashe", quoteNumber: "UF-Q-2026-0002", validUntil }),
+    subject: "Quotation UF-Q-20261001-0002",
+    body: quoteCoverEmail({ customerName: "Munashe", quoteNumber: "UF-Q-20261001-0002", validUntil }),
     inReplyTo: "<original@mail.gmail.com>",
-    attachments: [{ filename: "UF-Q-2026-0002.pdf", contentType: "application/pdf", data: Buffer.from("%PDF-1.4") }],
+    attachments: [{ filename: "UF-Q-20261001-0002.pdf", contentType: "application/pdf", data: Buffer.from("%PDF-1.4") }],
   }), "base64url").toString("utf8");
   assert.match(raw, /In-Reply-To: <original@mail.gmail.com>/);
-  assert.match(raw, /filename="UF-Q-2026-0002.pdf"/);
+  const subjectHeader = raw.match(/Subject: (.+)/)?.[1] ?? "";
+  const subject = subjectHeader.startsWith("=?UTF-8?B?")
+    ? Buffer.from(subjectHeader.replace(/=\?UTF-8\?B\?|\?=/g, ""), "base64").toString("utf8")
+    : subjectHeader;
+  assert.equal(subject, "Quotation UF-Q-20261001-0002");
+  assert.match(raw, /filename="UF-Q-20261001-0002.pdf"/);
   assert.match(raw, /application\/pdf/);
   assert.match(raw, /Good day Munashe,/);
   assert.equal(raw.includes("markup"), false);

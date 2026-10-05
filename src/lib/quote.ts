@@ -50,6 +50,11 @@ export function formatQuoteNumber(sequence: number, issuedAt: Date) {
   return `Q-${year}-${String(sequence).padStart(4, "0")}`;
 }
 
+export function urbanFocusQuoteNumber(sequence: number, issuedAt: Date) {
+  const stamp = zonedDateLabel(issuedAt).replaceAll("-", "");
+  return `UF-Q-${stamp}-${String(sequence).padStart(4, "0")}`;
+}
+
 export function quoteValidUntil(issuedAt: Date, validDays: number) {
   const [year, month, day] = zonedDateLabel(issuedAt).split("-").map(Number);
   const target = new Date(Date.UTC(year, month - 1, day + validDays));
@@ -94,7 +99,7 @@ export function formatQuoteEmail(input: {
   const validUntil = input.validUntil ?? quoteValidUntil(issuedAt, input.validDays ?? 14);
   const heading = input.number == null
     ? "Quotation number is assigned when this quote is sent."
-    : `Quotation ${formatQuoteNumber(input.number, issuedAt)}`;
+    : `Quotation No: ${urbanFocusQuoteNumber(input.number, issuedAt)}`;
   const rows = input.lines.map((line) => {
     const total = lineTotalCents(line.quantity, line.unitPriceCents) ?? 0;
     const parts = [`${line.description} — qty ${line.quantity} — ${formatCents(line.unitPriceCents, input.currency)} — ${formatCents(total, input.currency)}`];

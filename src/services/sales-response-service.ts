@@ -13,7 +13,8 @@ import {
   type RankedProduct,
 } from "../lib/sales-response";
 import type { ProductRequirement, SourcingCandidate } from "../lib/sourcing";
-import { lineTotalCents } from "../lib/quote";
+import { formatQuoteDate, lineTotalCents } from "../lib/quote";
+import { quotationEmailSubject, urbanFocusQuoteNumber } from "../lib/quotation-document";
 import { sendThreadReply } from "./reply-service";
 
 export { unpricedCatalogueNote };
@@ -150,16 +151,17 @@ export async function processQuoteFollowUps() {
       stopped += 1;
       continue;
     }
-    if (action !== "send" || !quote.rfq.sourceMessage.fromEmail || quote.number == null) continue;
-    const validUntil = quote.validUntil ? quote.validUntil.toISOString().slice(0, 10) : "";
+    if (action !== "send" || !quote.rfq.sourceMessage.fromEmail || quote.number == null || quote.issuedAt == null) continue;
+    const quoteNumber = urbanFocusQuoteNumber(quote.number, quote.issuedAt);
+    const validUntil = quote.validUntil ? formatQuoteDate(quote.validUntil) : "";
     await sendThreadReply(
       { userId: "system", workspaceId: quote.workspaceId },
       {
         messageId: quote.rfq.sourceMessageId,
         to: quote.rfq.sourceMessage.fromEmail,
         cc: "",
-        subject: quote.rfq.subject.toLowerCase().startsWith("re:") ? quote.rfq.subject : `Re: ${quote.rfq.subject}`,
-        body: composeFollowUp({ quoteNumber: String(quote.number), validUntil }),
+        subject: quotationEmailSubject(quote.number, quote.issuedAt),
+        body: composeFollowUp({ quoteNumber, validUntil }),
       },
     );
     const nextCount = quote.followUpCount + 1;

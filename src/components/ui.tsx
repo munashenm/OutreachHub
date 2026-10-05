@@ -38,8 +38,8 @@ export function PageHeader({
   );
 }
 
-export function Panel({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <section className={`rounded-xl border border-line bg-card shadow-sm ${className}`}>{children}</section>;
+export function Panel({ children, className = "", id }: { children: ReactNode; className?: string; id?: string }) {
+  return <section id={id} className={`rounded-xl border border-line bg-card shadow-sm ${className}`}>{children}</section>;
 }
 
 export function EmptyState({ title, description }: { title: string; description: string }) {

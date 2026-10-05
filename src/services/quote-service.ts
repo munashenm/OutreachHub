@@ -3,13 +3,14 @@ import { getDb } from "../lib/db";
 import { AppError } from "../lib/errors";
 import { parseMoneyToCents, parseQuantity, quoteValidUntil, snapshotQuoteLine } from "../lib/quote";
 import { quoteMarginBlock, sellMarginPercent } from "../lib/stock";
-import { quoteCoverEmail, urbanFocusQuoteNumber } from "../lib/quotation-document";
+import { quoteCoverEmail, quotationEmailSubject, urbanFocusQuoteNumber } from "../lib/quotation-document";
 import { ownedByWorkspace } from "../lib/gmail-sync";
 import { recordActivity } from "./activity-service";
 import { getRfq } from "./rfq-service";
 import { generateQuotePdf } from "./quotation-pdf-service";
 import { sendThreadReply } from "./reply-service";
 import { recordFunnel, scheduleQuoteFollowUp } from "./sales-response-service";
+import { markAnalysisApproved, responseModeForRfq } from "./document-analysis-service";
 import { queueStockForWebsite } from "./stock-sync-service";
 import { lowestCostsByProduct } from "./supplier-service";
 import type { Actor } from "./types";
@@ -115,6 +116,7 @@ export async function getQuoteDocument(workspaceId: string, id: string) {
 export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays: number; notes: string; documentMode?: "STANDARD" | "FORMAL"; exportQuote?: boolean; references?: string }) {
   const rfq = await getRfq(actor.workspaceId, rfqId);
   if (!rfq) throw new AppError("RFQ not found.", 404, "NOT_FOUND");
+  if (await responseModeForRfq(rfq.id) === "TENDER_PACKAGE") throw new AppError("This tender requires the official submission method. An email quotation was not sent.");
   const quote = await getDb().quote.findFirst({
     where: { workspaceId: actor.workspaceId, rfqId: rfq.id, status: "DRAFT" },
     include: { lines: true },
@@ -187,7 +189,7 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
     messageId: rfq.sourceMessageId,
     to,
     cc: "",
-    subject: rfq.subject.toLowerCase().startsWith("re:") ? rfq.subject : `Re: ${rfq.subject}`,
+    subject: quotationEmailSubject(quoteNumber, quoteIssuedAt),
     body,
     attachments: [{ filename: pdf.filename, contentType: "application/pdf", data: pdf.bytes }],
   });
@@ -217,4 +219,5 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
   });
   const marginPercent = margins.length === 0 ? null : Math.round(margins.reduce((sum, margin) => sum + margin, 0) / margins.length);
   await recordFunnel({ workspaceId: actor.workspaceId, rfqId: rfq.id, status: "QUOTE_SENT", valueCents: Math.round(valueCents), marginPercent });
+  await markAnalysisApproved(actor, rfq.id);
 }

@@ -42,11 +42,10 @@ function drawHeader(pdf: Pdf, document: QuotationDocument, logo: Buffer | null) 
   pdf.fillColor(NAVY).font("Helvetica-Bold").fontSize(16).text("FORMAL QUOTATION", 280, 36, { width: 275, align: "right" });
   pdf.font("Helvetica").fontSize(9).fillColor(MUTED);
   const facts = [
-    `Quotation ${document.numberLabel}`,
-    `Date ${document.issuedLabel}`,
-    `Valid until ${document.validUntilLabel}`,
-    `Currency ${document.currency}`,
-    `Availability ${document.company.availability}`,
+    `Quotation No: ${document.numberLabel}`,
+    `Date: ${document.issuedLabel}`,
+    `Valid Until: ${document.validUntilLabel}`,
+    `Availability: ${document.availability}`,
   ];
   facts.forEach((fact, index) => pdf.text(fact, 280, 58 + index * 12, { width: 275, align: "right" }));
   pdf.moveTo(40, 128).lineTo(555, 128).lineWidth(2).strokeColor(BLUE).stroke();
@@ -92,7 +91,7 @@ function drawSchedule(pdf: Pdf, document: QuotationDocument) {
     const y = pdf.y;
     pdf.rect(40, y, 515, height).fillColor(index % 2 === 0 ? "#F7FAFC" : "#FFFFFF").fill();
     pdf.fillColor("#111827").font("Helvetica").fontSize(8);
-    pdf.text(String(index + 1), columns[0] + 4, y + 6, { width: widths[0] });
+    pdf.text(line.scheduleNumber || String(index + 1), columns[0] + 4, y + 6, { width: widths[0] });
     pdf.text(body, columns[1] + 4, y + 6, { width: widths[1] - 8 });
     pdf.text(String(line.quantity), columns[2] + 4, y + 6, { width: widths[2] - 8, align: "right" });
     pdf.text(moneyLabel(line.unitPriceCents, document.currency), columns[3] + 4, y + 6, { width: widths[3] - 8, align: "right" });
@@ -115,6 +114,9 @@ function drawTotals(pdf: Pdf, document: QuotationDocument) {
     pdf.text(row[1], 440, y, { width: 115, align: "right", lineBreak: false });
     pdf.y = y + 16;
   }
+  pdf.moveDown(0.4);
+  pdf.font("Helvetica").fontSize(8).fillColor("#111827").text(document.customerMessage, 40, pdf.y, { width: 515 });
+  pdf.moveDown(0.4);
 }
 
 function drawTerms(pdf: Pdf, document: QuotationDocument) {
@@ -122,8 +124,10 @@ function drawTerms(pdf: Pdf, document: QuotationDocument) {
   pdf.fillColor(NAVY).font("Helvetica-Bold").fontSize(11).text("COMMERCIAL TERMS", 40, pdf.y);
   pdf.moveDown(0.3);
   for (const term of document.terms) {
-    ensureSpace(pdf, document, 28);
-    pdf.font("Helvetica-Bold").fontSize(8).fillColor(NAVY).text(term.label, 40, pdf.y, { continued: false });
+    pdf.font("Helvetica").fontSize(8);
+    const height = pdf.heightOfString(term.label, { width: 515 }) + pdf.heightOfString(term.text, { width: 515 }) + 8;
+    ensureSpace(pdf, document, height);
+    pdf.font("Helvetica-Bold").fontSize(8).fillColor(NAVY).text(term.label, 40, pdf.y, { width: 515 });
     pdf.font("Helvetica").fontSize(8).fillColor("#111827").text(term.text, 40, pdf.y, { width: 515 });
     pdf.moveDown(0.2);
   }
@@ -140,7 +144,7 @@ function drawBanking(pdf: Pdf, document: QuotationDocument) {
     document.banking.accountType,
     document.banking.accountNumber ? `Account ${document.banking.accountNumber}` : "",
     document.banking.branchCode ? `Branch ${document.banking.branchCode}` : "",
-    `Payment reference ${document.banking.reference}`,
+    document.banking.reference ? `Payment Reference: ${document.banking.reference}` : "",
   ].filter(Boolean);
   for (const line of lines) pdf.text(line, 40, pdf.y, { width: 515 });
 }

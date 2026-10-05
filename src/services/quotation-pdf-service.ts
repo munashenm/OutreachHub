@@ -43,6 +43,24 @@ export async function generateQuotePdf(workspaceId: string, quoteId: string, opt
     },
   });
   if (!quote) throw new AppError("Quotation not found.", 404, "NOT_FOUND");
+  if (quote.number == null && quote.status !== "SENT") {
+    const issuedAt = quote.issuedAt ?? new Date();
+    const assigned = await getDb().$transaction(async (tx) => {
+      const current = await tx.quote.findFirst({ where: { id: quoteId, workspaceId }, select: { number: true, issuedAt: true } });
+      if (!current) throw new AppError("Quotation not found.", 404, "NOT_FOUND");
+      if (current.number != null) return { number: current.number, issuedAt: current.issuedAt ?? issuedAt };
+      const workspace = await tx.workspace.update({
+        where: { id: workspaceId },
+        data: { quoteSequence: { increment: 1 } },
+        select: { quoteSequence: true },
+      });
+      const nextIssuedAt = current.issuedAt ?? issuedAt;
+      await tx.quote.update({ where: { id: quoteId }, data: { number: workspace.quoteSequence, issuedAt: nextIssuedAt } });
+      return { number: workspace.quoteSequence, issuedAt: nextIssuedAt };
+    });
+    quote.number = assigned.number;
+    quote.issuedAt = assigned.issuedAt;
+  }
   if (quote.status === "SENT") {
     if (!quote.pdf || !quote.pdfFilename) throw new AppError("The issued quotation PDF is not stored.");
     return { filename: quote.pdfFilename, bytes: Buffer.from(quote.pdf) };
@@ -82,6 +100,7 @@ export async function generateQuotePdf(workspaceId: string, quoteId: string, opt
       requirementText: line.requirementText || quote.rfq.lines[index]?.specifications || quote.rfq.lines[index]?.description || "",
       matchGrade: line.matchGrade,
       costStatus: line.costStatus,
+      scheduleNumber: line.scheduleNumber,
     })),
   });
   const bytes = await renderQuotationPdf(document);
