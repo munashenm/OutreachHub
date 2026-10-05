@@ -57,15 +57,22 @@ async function readPdf(filename: string, bytes: Buffer) {
   return { pages, warnings };
 }
 
+type CanvasFactory = (width: number, height: number) => { getContext: (kind: "2d") => unknown; toBuffer: (type: "image/png") => Buffer };
+
+function canvasPackage() {
+  return ["@napi-rs", "canvas"].join("/");
+}
+
 export async function renderScannedPdfPages(bytes: Buffer, pageNumbers: number[]) {
   if (pageNumbers.length === 0) return [];
-  let createCanvas: ((width: number, height: number) => { getContext: (kind: "2d") => unknown; toBuffer: (type: "image/png") => Buffer }) | null = null;
+  let createCanvas: CanvasFactory | null = null;
   try {
-    const canvas = await import("@napi-rs/canvas");
+    const canvas = await import(canvasPackage()) as { createCanvas: CanvasFactory };
     createCanvas = canvas.createCanvas;
   } catch {
     return [];
   }
+  if (!createCanvas) return [];
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const require = createRequire(import.meta.url);
   const fontDir = path.join(path.dirname(require.resolve("pdfjs-dist/package.json")), "standard_fonts") + path.sep;
