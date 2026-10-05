@@ -30,6 +30,10 @@ export async function getThread(workspaceId: string, messageId: string) {
 }
 
 export async function sendThreadReply(actor: Actor, input: { messageId: string; to: string; cc: string; subject: string; body: string; attachments?: { filename: string; contentType: string; data: Buffer }[] }) {
+  return sendCustomerResponse(actor, input);
+}
+
+export async function sendCustomerResponse(actor: Actor, input: { messageId: string; to: string; cc: string; subject: string; body: string; attachments?: { filename: string; contentType: string; data: Buffer }[] }) {
   const original = ownedByWorkspace(
     await getDb().message.findFirst({ where: { id: input.messageId, workspaceId: actor.workspaceId } }),
     actor.workspaceId,

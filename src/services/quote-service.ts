@@ -8,7 +8,7 @@ import { ownedByWorkspace } from "../lib/gmail-sync";
 import { recordActivity } from "./activity-service";
 import { getRfq } from "./rfq-service";
 import { generateQuotePdf } from "./quotation-pdf-service";
-import { sendThreadReply } from "./reply-service";
+import { sendCustomerResponse } from "./reply-service";
 import { recordFunnel, scheduleQuoteFollowUp } from "./sales-response-service";
 import { markAnalysisApproved, responseModeForRfq } from "./document-analysis-service";
 import { queueStockForWebsite } from "./stock-sync-service";
@@ -185,7 +185,7 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
     quoteNumber: urbanFocusQuoteNumber(quoteNumber, quoteIssuedAt),
     validUntil: prepared.validUntil,
   });
-  await sendThreadReply(actor, {
+  await sendCustomerResponse(actor, {
     messageId: rfq.sourceMessageId,
     to,
     cc: "",
