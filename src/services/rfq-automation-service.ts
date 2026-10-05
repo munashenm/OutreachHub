@@ -28,7 +28,7 @@ import { extractProductRequirements, planSourcing, QUANTITY_CLARIFICATION, requi
 import { sourceExternalForRequirements } from "./external-sourcing-service";
 import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp, unpricedCatalogueNote } from "./sales-response-service";
 import { analyseRfqDocuments, analysisTextForRfq, listTenderAnalyses, responseModeForRfq, saveAnalysisMatches } from "./document-analysis-service";
-import { matchRequestedSpecification, type AnalysisMatch } from "../lib/document-analysis";
+import { matchRequestedSpecification, UNPRICED_LINE, type AnalysisMatch } from "../lib/document-analysis";
 
 const BATCH = 15;
 
@@ -259,7 +259,7 @@ export async function findDocumentProducts(workspaceId: string, rfqId: string) {
         .sort((left, right) => matchRank(left.result.match) - matchRank(right.result.match));
       const best = ranked[0];
       if (!best) {
-        matches.push({ lineNumber: item.lineNumber, match: "NO MATCH", explanation: "No catalogue or supplier product meets this line.", productId: null, productName: "", sku: "", sourceKind: "", sourceName: "", sourceUrl: "", observedPriceCents: null, vatIncluded: false, availability: "", observedAt, pricedFromSupplier: false });
+        matches.push({ lineNumber: item.lineNumber, match: "NO MATCH", explanation: "No catalogue or supplier product meets this line.", productId: null, productName: "", sku: "", sourceKind: "", sourceName: "", sourceUrl: "", observedPriceCents: null, vatIncluded: false, availability: "", observedAt, pricedFromSupplier: false, ...UNPRICED_LINE });
         continue;
       }
       const supplierPriced = best.candidate.sourceKind !== "EXTERNAL_SOURCE" && (best.candidate.costExVatCents ?? 0) > 0 && best.candidate.fresh;
@@ -278,6 +278,10 @@ export async function findDocumentProducts(workspaceId: string, rfqId: string) {
         availability: best.candidate.stockQty == null ? "" : `${best.candidate.stockQty} available`,
         observedAt,
         pricedFromSupplier: supplierPriced && best.result.match === "MATCH",
+        ...UNPRICED_LINE,
+        shippingCostCents: best.candidate.shippingCents > 0 ? best.candidate.shippingCents : null,
+        otherCostCents: best.candidate.procurementCents + best.candidate.importCents > 0 ? best.candidate.procurementCents + best.candidate.importCents : null,
+        supplierCostCents: supplierPriced ? best.candidate.costExVatCents : null,
       });
     }
     matchesByAnalysis.set(analysis.id, matches);

@@ -71,6 +71,27 @@ export type AnalysisMatch = {
   availability: string;
   observedAt: string;
   pricedFromSupplier: boolean;
+  supplierCostCents: number | null;
+  shippingCostCents: number | null;
+  otherCostCents: number | null;
+  configuredMarginPercent: number | null;
+  sellingPriceExVatCents: number | null;
+  vatCents: number | null;
+  sellingPriceInclVatCents: number | null;
+  quantity: number | null;
+  lineTotalCents: number | null;
+};
+
+export const UNPRICED_LINE = {
+  supplierCostCents: null,
+  shippingCostCents: null,
+  otherCostCents: null,
+  configuredMarginPercent: null,
+  sellingPriceExVatCents: null,
+  vatCents: null,
+  sellingPriceInclVatCents: null,
+  quantity: null,
+  lineTotalCents: null,
 };
 
 export type StoredDocumentAnalysis = DocumentAnalysisRecord & { matches: AnalysisMatch[] };
@@ -251,6 +272,8 @@ export function matchRequestedSpecification(item: AnalysisItem, candidate: Sourc
   if (differentProduct && grade !== "EXACT" && grade !== "MEETS_REQUIREMENT") return { match: "NO MATCH", explanation: `${candidate.name} is not the requested ${item.requiredBrand} ${item.requiredModel}`.trim() + "." };
   if (grade === "DOES_NOT_MEET") return { match: "NO MATCH", explanation: `${candidate.name} does not meet the requested specification.` };
   if (grade === "EXCEEDS_REQUIREMENT" && !item.equivalentAllowed) return { match: "NO MATCH", explanation: `${candidate.name} exceeds the requested specification, and the document does not allow an equivalent.` };
+  const stated = Object.keys(item.mandatorySpecs).filter((key) => !missing.includes(key));
+  if (missing.length > 0 && stated.length > 0) return { match: "PARTIAL MATCH", explanation: `${candidate.name} matches ${stated.join(", ")} and does not state ${missing.join(", ")}.` };
   if (grade === "PARTIAL" || missing.length > 0) return { match: "NEEDS REVIEW", explanation: missing.length > 0 ? `${candidate.name} does not state ${missing.join(", ")}.` : `${candidate.name} does not state every requested specification.` };
   if (grade === "EXACT" || grade === "MEETS_REQUIREMENT" || (grade === "EXCEEDS_REQUIREMENT" && item.equivalentAllowed)) {
     return { match: "MATCH", explanation: item.equivalentAllowed && grade === "EXCEEDS_REQUIREMENT" ? `${candidate.name} is equal or better, which this document allows.` : `${candidate.name} meets the requested specification.` };
@@ -261,6 +284,27 @@ export function matchRequestedSpecification(item: AnalysisItem, candidate: Sourc
 export function groupAnalysisKey(record: Pick<DocumentAnalysisRecord, "referenceNumber" | "customerName" | "requestTitle">) {
   if (record.referenceNumber.trim()) return `ref:${record.referenceNumber.trim().toLowerCase()}`;
   return `customer:${record.customerName.trim().toLowerCase()}|${record.requestTitle.trim().toLowerCase()}`;
+}
+
+export function shareDocumentContext(records: StoredDocumentAnalysis[]): StoredDocumentAnalysis[] {
+  const donors = records.filter((record) => record.referenceNumber.trim());
+  return records.map((record) => {
+    if (record.referenceNumber.trim() || donors.length === 0) return record;
+    const mentioned = `${record.requestTitle}\n${record.items.map((item) => item.description).join("\n")}`.toLowerCase();
+    const donor = donors.find((item) => mentioned.includes(item.referenceNumber.trim().toLowerCase()) || (record.customerName.trim() && item.customerName.trim().toLowerCase() === record.customerName.trim().toLowerCase()));
+    if (!donor || donor === record) return record;
+    const source = donor.sources.find((item) => item.field === "referenceNumber");
+    const sourceDocument = source?.sourceDocument || donor.items[0]?.sourceDocument || "";
+    const sourcePage = source?.sourcePage ?? donor.items[0]?.sourcePage ?? null;
+    return {
+      ...record,
+      referenceNumber: donor.referenceNumber,
+      customerName: record.customerName || donor.customerName,
+      closingDate: record.closingDate || donor.closingDate,
+      closingTime: record.closingTime || donor.closingTime,
+      sources: [...record.sources, { field: "referenceNumber", sourceDocument, sourcePage }],
+    };
+  });
 }
 
 export function analysisAsRequirementText(record: DocumentAnalysisRecord) {
@@ -372,6 +416,11 @@ function specsIn(text: string) {
   if (/\b(lte|sim)\b/i.test(text)) specs.lte = "LTE";
   if (/\btpm\b/i.test(text)) specs.tpm = "TPM";
   if (/\bsecure boot\b/i.test(text)) specs.secureBoot = "secure boot";
+  const warranty = text.match(/\b(\d+\s*(?:year|yr)s?\s+warranty)\b/i)?.[1];
+  if (warranty) specs.warranty = warranty;
+  const ports = ["HDMI", "USB-C", "Thunderbolt", "Ethernet"].filter((port) => new RegExp(port.replace("-", "[- ]?"), "i").test(text));
+  if (ports.length > 0) specs.ports = ports.join(", ");
+  if (/\btracking software\b/i.test(text)) specs.trackingSoftware = "tracking software";
   return specs;
 }
 

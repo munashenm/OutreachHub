@@ -4,6 +4,7 @@ import {
   analyseDocumentText,
   analysisAsRequirementText,
   applyAnalysisEdit,
+  shareDocumentContext,
   classifyDocument,
   decideResponseMode,
   groupAnalysisKey,
@@ -173,4 +174,27 @@ test("related documents share a tender number and a manual edit does not invent 
   assert.equal(edited.items[0]?.quantity ?? null, null);
   const numbered = applyAnalysisEdit({ ...left, items: [{ ...left.items[0], lineNumber: "1", description: "Laptop", quantity: null, unit: "", requiredBrand: "", requiredModel: "", equivalentAllowed: false, mandatorySpecs: {}, optionalSpecs: {}, accessories: [], warrantyRequirements: "", serviceRequirements: "", sourceDocument: "a.pdf", sourcePage: 1, extractionConfidence: 80, specificationGroup: "" }] }, "items.0.quantity", "4");
   assert.equal(numbered.items[0]?.quantity, 4);
+});
+
+test("a pricing schedule inherits a tender number it cites", () => {
+  const tender = { ...analyseDocumentText({ filename: "tender.pdf", pages: [{ page: 1, text: "Tender No: ABC-1\nCustomer: Acme\nClosing date: 20 October 2026" }] }), matches: [] };
+  const schedule = { ...analyseDocumentText({ filename: "schedule.csv", pages: [{ page: 1, text: "Pricing schedule for ABC-1\nDescription | Qty\nLaptop | 2" }] }), matches: [] };
+  const shared = shareDocumentContext([tender, schedule]);
+  assert.equal(shared[1]?.referenceNumber, "ABC-1");
+  assert.equal(shared[1]?.customerName, "Acme");
+  assert.equal(shared[1]?.closingDate, "20 October 2026");
+});
+
+test("a missing hard specification is a partial match and unstated fields stay empty", () => {
+  const record = analyseDocumentText({
+    filename: "rfq.pdf",
+    pages: [{ page: 1, text: "Please quote\n1. Lenovo ThinkPad E14, Core i5, 16GB RAM, 512GB SSD, Windows 11 Pro, 14 inch, HDMI, 3 year warranty, tracking software" }],
+  });
+  const item = record.items[0];
+  assert.equal(item?.mandatorySpecs.ports, "HDMI");
+  assert.match(item?.mandatorySpecs.warranty ?? "", /3 year warranty/i);
+  assert.equal(item?.mandatorySpecs.trackingSoftware, "tracking software");
+  assert.equal(item?.mandatorySpecs.lte, undefined);
+  const partial = matchRequestedSpecification(item, candidate({ specifications: "Core i5, 16GB RAM, 512GB SSD, Windows 11 Pro, 14 inch, HDMI" }));
+  assert.equal(partial.match, "PARTIAL MATCH");
 });

@@ -6,6 +6,7 @@ import {
   analysisAsRequirementText,
   applyAnalysisEdit,
   decideResponseMode,
+  shareDocumentContext,
   pageIsScanned,
   quoteCompletionBlock,
   requiresEveryLinePriced,
@@ -15,7 +16,7 @@ import {
   type ResponseMode,
   type StoredDocumentAnalysis,
 } from "../lib/document-analysis";
-import { readDocumentFile } from "../lib/document-files";
+import { readDocumentFile, renderScannedPdfPages } from "../lib/document-files";
 import { readImageText } from "../lib/document-vision";
 import { AppError } from "../lib/errors";
 import type { Actor } from "./types";
@@ -79,16 +80,28 @@ export async function analyseRfqDocuments(workspaceId: string, rfqId: string) {
       const vision = await readImageText({ filename: file.filename, contentType: file.contentType, bytes: Buffer.from(file.content) });
       if (vision.text) pages.push({ page: pages.length + 1, text: vision.text });
       if (vision.warning) warnings.push(vision.warning);
-    } else if (pages.some((page) => pageIsScanned(page.text))) {
-      warnings.push("A scanned page had no readable text. The original file is kept. No text was invented for that page.");
+    } else if (supportedAttachment(file.filename, file.contentType) === "pdf" && pages.some((page) => pageIsScanned(page.text))) {
+      const rendered = await renderScannedPdfPages(Buffer.from(file.content), pages.filter((page) => pageIsScanned(page.text)).map((page) => page.page));
+      if (rendered.length === 0) warnings.push("A scanned page had no readable text. The original file is kept. No text was invented for that page.");
+      for (const image of rendered) {
+        const vision = await readImageText({ filename: `${file.filename} page ${image.page}`, contentType: "image/png", bytes: image.png });
+        const target = pages.find((page) => page.page === image.page);
+        if (target && vision.text) target.text = vision.text;
+        if (vision.warning) warnings.push(vision.warning);
+      }
     }
     documents.push({ filename: file.filename, attachmentId: file.id, pages, warnings });
   }
-  const saved: ResponseMode[] = [];
-  for (const document of documents) {
+  const prepared = documents.map((document) => {
     let record: StoredDocumentAnalysis = { ...analyseDocumentText({ filename: document.filename, pages: document.pages }), matches: [] };
     record.warnings.push(...document.warnings.filter((warning) => !record.warnings.includes(warning)));
     for (const edit of previousEdits) record = { ...applyAnalysisEdit(record, edit.field, edit.nextValue), matches: record.matches };
+    return { document, record };
+  });
+  const shared = shareDocumentContext(prepared.map((entry) => entry.record));
+  const saved: ResponseMode[] = [];
+  for (const [index, document] of documents.entries()) {
+    let record = shared[index] ?? prepared[index].record;
     record.responseMode = decideResponseMode({
       documentType: record.documentType,
       text: document.pages.map((page) => page.text).join("\n"),
@@ -227,7 +240,18 @@ export async function generateQuoteFromAnalysis(actor: Actor, rfqId: string) {
       requestedQty: quantity,
       abnormalPriceChange: false,
     });
-    if (priced.sellExVatCents == null) continue;
+    if (priced.sellExVatCents == null || priced.costExVatCents == null) continue;
+    const vatCents = priced.sellInclVatCents == null ? null : priced.sellInclVatCents - priced.sellExVatCents;
+    const vatTreatment = rows.find((entry) => entry.record.matches.includes(match))?.record.vatTreatment ?? "";
+    match.supplierCostCents = priced.costExVatCents;
+    match.shippingCostCents = match.shippingCostCents ?? null;
+    match.otherCostCents = match.otherCostCents ?? null;
+    match.configuredMarginPercent = priced.marginPercent;
+    match.sellingPriceExVatCents = priced.sellExVatCents;
+    match.vatCents = vatTreatment === "" ? null : vatCents;
+    match.sellingPriceInclVatCents = vatTreatment === "" ? null : priced.sellInclVatCents;
+    match.quantity = quantity;
+    match.lineTotalCents = Math.round(priced.sellExVatCents * quantity);
     await db.quoteLine.create({
       data: {
         workspaceId: actor.workspaceId,
@@ -245,7 +269,16 @@ export async function generateQuoteFromAnalysis(actor: Actor, rfqId: string) {
         costStatus: "VERIFIED",
         scheduleNumber: match.lineNumber,
         requirementText: item.description || match.explanation,
+        warranty: item.warrantyRequirements,
+        leadTime: chosen?.leadTimeDays ? `${chosen.leadTimeDays} days` : "",
+        sourceCheckedAt: now,
       },
+    });
+  }
+  for (const row of rows) {
+    await db.tenderAnalysis.update({
+      where: { id: row.id },
+      data: { analysis: row.record as unknown as Prisma.InputJsonValue },
     });
   }
   const reference = rows.map((row) => row.record.referenceNumber).find(Boolean) ?? "";

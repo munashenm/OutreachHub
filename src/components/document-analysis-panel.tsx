@@ -61,6 +61,24 @@ export function DocumentAnalysisPanel({ rfqId, documents, sendBlocked, quotePrev
       </div>
       <List title="Pricing sources" values={matches.filter((match) => match.sourceName).map((match) => `${match.sourceName}${match.sourceUrl ? ` ${match.sourceUrl}` : ""} · ${match.pricedFromSupplier ? "supplier cost" : "not a confirmed supplier cost"} · ${match.observedAt}`)} />
       <div>
+        <h3 className="font-semibold">Customer pricing schedule</h3>
+        {items.length === 0 ? <p className="mt-2 text-sm text-muted">No lines were stated.</p> : (
+          <ul className="mt-2 space-y-2 text-sm">
+            {items.map((item, index) => {
+              const match = matches.find((entry) => entry.lineNumber === item.lineNumber);
+              return (
+                <li key={`schedule-${item.lineNumber}-${index}`}>
+                  {item.lineNumber || index + 1}. {item.description}
+                  {item.quantity == null ? "" : ` · ${item.quantity} ${item.unit}`}
+                  {match?.productName ? ` · ${match.productName} ${match.sku}` : ""}
+                  <span className="block text-muted">{priceLine(match)}</span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+      <div>
         <h3 className="font-semibold">Quote preview</h3>
         {quotePreview.length === 0 ? <p className="mt-2 text-sm text-muted">No priced quotation lines yet.</p> : (
           <ul className="mt-2 space-y-1 text-sm">
@@ -71,6 +89,12 @@ export function DocumentAnalysisPanel({ rfqId, documents, sendBlocked, quotePrev
       <List title="Extraction warnings" values={combined.flatMap((document) => [...document.warnings, ...document.ambiguities])} />
     </section>
   );
+}
+
+function priceLine(match: { supplierCostCents: number | null; shippingCostCents: number | null; otherCostCents: number | null; configuredMarginPercent: number | null; sellingPriceExVatCents: number | null; vatCents: number | null; sellingPriceInclVatCents: number | null; lineTotalCents: number | null } | undefined) {
+  if (!match) return "Not priced.";
+  const money = (cents: number | null) => cents == null ? "not stated" : formatCents(cents);
+  return `Supplier ${money(match.supplierCostCents)} · Shipping ${money(match.shippingCostCents)} · Other ${money(match.otherCostCents)} · Margin ${match.configuredMarginPercent == null ? "not stated" : `${match.configuredMarginPercent}%`} · Ex VAT ${money(match.sellingPriceExVatCents)} · VAT ${money(match.vatCents)} · Incl VAT ${money(match.sellingPriceInclVatCents)} · Line total ${money(match.lineTotalCents)}`;
 }
 
 function List({ title, values }: { title: string; values: string[] }) {
