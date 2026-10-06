@@ -389,10 +389,10 @@ function sortCandidates(requirement: ProductRequirement, candidates: SourcingCan
 function priceLevels(candidates: SourcingCandidate[], count: number) {
   const priced = candidates.map((candidate) => ({ candidate, price: priceOf(candidate) })).filter((item) => item.price > 0).sort((left, right) => left.price - right.price);
   if (priced.length === 0) return [];
-  if (count < 2 || priced.length === 1) return [priced[0].candidate];
+  if (count < 2) return [priced[0].candidate];
   const cheap = priced[0];
   const dear = [...priced].reverse().find((item) => item.price > cheap.price);
-  return dear ? [cheap.candidate, dear.candidate] : [cheap.candidate];
+  return dear ? [cheap.candidate, dear.candidate] : [];
 }
 
 export function candidateScore(requirement: ProductRequirement, candidate: SourcingCandidate) {

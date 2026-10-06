@@ -15,7 +15,7 @@ import {
 import { equivalentsRejected } from "../lib/rfq-match";
 import type { ProductRequirement, SourcingCandidate } from "../lib/sourcing";
 import { formatQuoteDate, lineTotalCents } from "../lib/quote";
-import { quotationEmailSubject, urbanFocusQuoteNumber } from "../lib/quotation-document";
+import { displayedQuoteNumber, quotationEmailSubject } from "../lib/quotation-document";
 import { sendCustomerResponse } from "./reply-service";
 
 export { unpricedCatalogueNote };
@@ -154,7 +154,7 @@ export async function processQuoteFollowUps() {
       continue;
     }
     if (action !== "send" || !quote.rfq.sourceMessage.fromEmail || quote.number == null || quote.issuedAt == null) continue;
-    const quoteNumber = urbanFocusQuoteNumber(quote.number, quote.issuedAt);
+    const quoteNumber = displayedQuoteNumber(quote.number, quote.issuedAt, quote.pdfFilename);
     const validUntil = quote.validUntil ? formatQuoteDate(quote.validUntil) : "";
     await sendCustomerResponse(
       { userId: "system", workspaceId: quote.workspaceId },
@@ -162,7 +162,7 @@ export async function processQuoteFollowUps() {
         messageId: quote.rfq.sourceMessageId,
         to: quote.rfq.sourceMessage.fromEmail,
         cc: "",
-        subject: quotationEmailSubject(quote.number, quote.issuedAt),
+        subject: quotationEmailSubject(quote.number, quote.issuedAt, quote.pdfFilename),
         body: composeFollowUp({ quoteNumber, validUntil }),
       },
     );

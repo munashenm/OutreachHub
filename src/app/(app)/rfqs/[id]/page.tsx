@@ -8,7 +8,7 @@ import { rerunRfqAction } from "@/actions/rfq-actions";
 import { PageHeader, Panel, buttonSecondary } from "@/components/ui";
 import { formatDateTime, fullName } from "@/lib/format";
 import { formatCents } from "@/lib/quote";
-import { urbanFocusQuoteNumber } from "@/lib/quotation-document";
+import { displayedQuoteNumber } from "@/lib/quotation-document";
 import { replyTargets } from "@/lib/gmail-message";
 import type { RfqStatus } from "@/lib/labels";
 import { centsToInput } from "@/services/product-service";
@@ -166,6 +166,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
             emailBlocked={sendBlocked}
             quoteNumber={draft?.number ?? null}
             issuedAt={draft?.issuedAt ? draft.issuedAt.toISOString() : null}
+            pdfFilename={draft?.pdfFilename ?? ""}
           />
         </div>
         {sentQuotes.length > 0 ? (
@@ -173,7 +174,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
             {sentQuotes.map((quote) => (
               <li key={quote.id}>
                 {quote.number != null && quote.issuedAt ? (
-                  <Link className="hover:underline" href={`/quotes/${quote.id}`}>{urbanFocusQuoteNumber(quote.number, quote.issuedAt)}</Link>
+                  <Link className="hover:underline" href={`/quotes/${quote.id}`}>{displayedQuoteNumber(quote.number, quote.issuedAt, quote.pdfFilename)}</Link>
                 ) : "Quotation"}
                 {" "}sent {quote.sentAt ? formatDateTime(quote.sentAt) : ""} · {quote.lines.length} lines · confidence {quote.confidenceScore}
                 {" "}· <a className="hover:underline" href={`/api/quotes/${quote.id}/pdf`}>View Sent PDF</a>

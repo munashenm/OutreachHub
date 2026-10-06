@@ -452,6 +452,26 @@ Munashe`);
   assert.doesNotMatch(plan.message, /make and model|attachment/i);
 });
 
+test("a recommendation with only one price level stays in sourcing", () => {
+  const [requirement] = extractProductRequirements("Recommend two professional laptops for programming at different price levels. Minimum 16GB RAM, 512GB SSD, Windows 11 Pro.");
+  const only = catalogueLaptop({
+    name: "HP ProBook 4 G1iR Core 5 16GB 512GB Windows 11 Pro",
+    sku: "HP-PB",
+    model: "",
+    productId: "hp",
+    listedPriceCents: 2_280_000,
+    costExVatCents: 1_200_000,
+    specifications: "HP ProBook 4 G1iR Core 5 16GB 512GB Windows 11 Pro",
+  });
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [only] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "SOURCING");
+});
+
 test("test C quotes two professional laptops at different prices", () => {
   const [requirement] = extractProductRequirements("Recommend two professional laptops for programming at different price levels.");
   assert.equal(requirement?.productType, "Laptop");

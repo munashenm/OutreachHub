@@ -49,6 +49,7 @@ export async function processInboundAutomation() {
     const gmailMessageId = message.externalId || message.id;
     const gate = await getDb().inboundMessageProcessing.findUnique({ where: { gmailMessageId }, select: { nextRetryAt: true, attemptCount: true } });
     if (gate?.nextRetryAt && gate.nextRetryAt > new Date()) {
+      // nextRetryAt can be 1 or 5 minutes, but this worker only runs every 15 minutes, so the retry waits for the next tick.
       results.push({ messageId: message.id, action: "retry-waiting" });
       continue;
     }
@@ -563,13 +564,18 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     await db.quoteLine.deleteMany({ where: { quoteId: draft.id } });
     if (sales) await db.quote.update({ where: { id: draft.id }, data: { confidenceScore: sales.confidence } });
   }
+  if (rankedOptions.length > 1) {
+    const alternativeNote = "These are alternative options. Choose one. The option totals are not added together.";
+    await db.quote.update({ where: { id: draft.id }, data: { notes: [draft.notes, alternativeNote].filter(Boolean).join("\n") } });
+  }
   for (const [index, option] of rankedOptions.entries()) {
+    const tier = index === 0 ? "Value" : "Performance";
     await db.quoteLine.create({
       data: {
         workspaceId: workspace.id,
         quoteId: draft.id,
         productId: option.productId,
-        description: rankedOptions.length > 1 ? `Option ${index + 1} — ${option.role}: ${option.name}` : option.name,
+        description: rankedOptions.length > 1 ? `OPTION ${index + 1} – ${tier}: ${option.name}` : option.name,
         quantity: new Prisma.Decimal(option.quantity.toFixed(2)),
         unitPriceCents: option.unitPriceCents,
         specifications: option.specifications,
@@ -756,17 +762,10 @@ export async function sourcingPools(workspaceId: string): Promise<SourcingPools>
     if (row.sourceKind === "SUPPLIER_API") supplierApis.push(row);
     else supplierFeeds.push(row);
   }
-  const scan = await db.storeCatalogueScan.findFirst({
-    where: { workspaceId, status: "COMPLETE" },
-    orderBy: { finishedAt: "desc" },
-    select: { id: true },
+  const storeItems = await db.storeCatalogueItem.findMany({
+    where: { workspaceId, published: true },
+    select: { productId: true, sku: true, name: true, brand: true, manufacturerPartNumber: true, specifications: true, description: true, stockQuantity: true, unitPriceCents: true },
   });
-  const storeItems = scan
-    ? await db.storeCatalogueItem.findMany({
-      where: { workspaceId, scanId: scan.id, published: true },
-      select: { productId: true, sku: true, name: true, brand: true, manufacturerPartNumber: true, specifications: true, description: true, stockQuantity: true, unitPriceCents: true },
-    })
-    : [];
   const seenSkus = new Set(catalogue.map((item) => item.sku.toLowerCase()).filter(Boolean));
   const costBySku = new Map<string, { costCents: number; markupPercent: number; fresh: boolean }>();
   for (const offer of offers) {

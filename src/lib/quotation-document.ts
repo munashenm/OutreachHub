@@ -1,23 +1,26 @@
-import { formatCents, formatQuoteDate, lineTotalCents, quoteTotalCents, urbanFocusQuoteNumber } from "./quote";
+import { displayedQuoteNumber, formatCurrency, formatQuoteDate, lineTotalCents, quoteTotalCents, urbanFocusQuoteNumber } from "./quote";
 
-export { urbanFocusQuoteNumber };
+export { displayedQuoteNumber, urbanFocusQuoteNumber };
 
 export const QUOTATION_AVAILABILITY = "Subject to stock at time of order.";
 export const QUOTATION_CUSTOMER_MESSAGE = "Thank you for the opportunity to quote. Please use the quotation number as your payment and correspondence reference.";
 
+export const QUOTATION_BANK = {
+  bankName: "Nedbank",
+  accountNumber: "1304574253",
+  accountType: "Current Account",
+  branchCode: "198765",
+};
+
 export const QUOTATION_TERMS: Array<{ label: string; text: string }> = [
-  { label: "Warranty", text: "All new hardware products supplied by Urban Focus carry a minimum 12-month warranty from the date of delivery unless a longer manufacturer warranty is stated on the quotation or product documentation. The warranty covers manufacturing defects under normal use. It does not cover accidental damage, misuse, liquid damage, electrical surges, physical damage, unauthorised repairs, or damage resulting from improper installation or operation." },
-  { label: "Returns & Exchanges", text: "Returns must be authorised by Urban Focus before goods are returned. Standard stocked products may be considered for return where they are unused, unopened, in their original packaging and in resalable condition. Special-order, customised, configured, licensed, activated or specifically sourced products may not be returnable unless defective or incorrectly supplied. Approved returns may be subject to applicable collection, delivery or restocking costs. Defective or incorrectly supplied goods will be handled in accordance with the applicable warranty and South African consumer law." },
-  { label: "Order Acceptance", text: "A purchase order, written acceptance, or payment against this quotation constitutes acceptance of the quoted products, pricing and commercial terms." },
-  { label: "Pricing and Stock", text: "Prices and availability are subject to confirmation at the time the order is placed. If supplier pricing or availability changes before acceptance, Urban Focus may issue a revised quotation before processing the order." },
-  { label: "Delivery", text: "Delivery charges are excluded unless specifically listed in the quotation. Delivery dates are estimates and are confirmed after payment or order acceptance and stock confirmation." },
-  { label: "Product Substitution", text: "Urban Focus will not substitute a quoted product without informing the customer. Where the exact product becomes unavailable, an equivalent or better alternative may be proposed for customer approval." },
-  { label: "Payment Terms", text: "Payment is due before dispatch unless approved written credit terms exist. Goods remain the property of Urban Focus until payment has been received in full." },
-  { label: "Quotation Validity", text: "This quotation is valid until the stated expiry date and may be revised thereafter due to changes in supplier pricing, exchange rates, availability or other commercial factors." },
-  { label: "Errors and Omissions", text: "Urban Focus reserves the right to correct genuine typographical, calculation or pricing errors before an order is accepted." },
-  { label: "Software / Licensing", text: "Software licences, subscriptions, activation keys and digital products are subject to the relevant vendor's licensing terms and may be non-refundable once issued or activated." },
-  { label: "Taxes / Duties", text: "Prices are exclusive of VAT. VAT at 15% is added to the total." },
-];
+  "Quotation is valid until the date stated above and is subject to stock availability.",
+  "Payment is required before dispatch unless approved credit terms are in place.",
+  "Delivery charges are excluded unless specifically stated on this quotation.",
+  "New hardware carries a minimum 12-month warranty unless a longer manufacturer warranty is specified.",
+  "Returns require prior approval. Special-order, configured and activated/licensed products may not be returnable unless defective.",
+  "Product substitutions will only be made with customer approval.",
+  "Urban Focus reserves the right to correct genuine pricing or calculation errors before order acceptance.",
+].map((text, index) => ({ label: String(index + 1), text }));
 
 export const VAT_RATE = 15;
 
@@ -77,6 +80,7 @@ export type QuotationDocument = {
   customerCompany: string;
   contactName: string;
   email: string;
+  customerPhone: string;
   customerReference: string;
   deliveryLocation: string;
   subject: string;
@@ -99,6 +103,7 @@ export type QuotationDocument = {
   references: string[];
   customerMessage: string;
   availability: string;
+  alternatives: boolean;
 };
 
 export function defaultQuoteCompanySettings(): QuoteCompanySettings {
@@ -129,12 +134,12 @@ export function defaultQuoteCompanySettings(): QuoteCompanySettings {
   };
 }
 
-export function quotePdfFilename(sequence: number, issuedAt: Date) {
-  return `${urbanFocusQuoteNumber(sequence, issuedAt)}.pdf`;
+export function quotePdfFilename(sequence: number, issuedAt: Date, storedFilename = "") {
+  return `${displayedQuoteNumber(sequence, issuedAt, storedFilename)}.pdf`;
 }
 
-export function quotationEmailSubject(sequence: number, issuedAt: Date) {
-  return `Quotation ${urbanFocusQuoteNumber(sequence, issuedAt)}`;
+export function quotationEmailSubject(sequence: number, issuedAt: Date, storedFilename = "") {
+  return `Quotation ${displayedQuoteNumber(sequence, issuedAt, storedFilename)}`;
 }
 
 export function quoteCoverEmail(input: { customerName: string; quoteNumber: string; validUntil: Date }) {
@@ -168,6 +173,7 @@ export function buildQuotationDocument(input: {
   customerCompany: string;
   contactName: string;
   email: string;
+  customerPhone?: string;
   customerReference: string;
   deliveryLocation: string;
   subject: string;
@@ -175,25 +181,22 @@ export function buildQuotationDocument(input: {
   lines: QuotationLineInput[];
   references: string[];
   blockedReferenceUrls?: string[];
+  storedFilename?: string;
 }): QuotationDocument {
   const totals = quotationTotals(input.lines);
   if (!totals) throw new Error("The quotation totals could not be calculated.");
-  const numberLabel = input.sequence == null ? "" : urbanFocusQuoteNumber(input.sequence, input.issuedAt);
-  const filename = input.sequence == null ? "quotation.pdf" : quotePdfFilename(input.sequence, input.issuedAt);
+  const numberLabel = input.sequence == null ? "" : displayedQuoteNumber(input.sequence, input.issuedAt, input.storedFilename ?? "");
+  const filename = input.sequence == null ? "quotation.pdf" : quotePdfFilename(input.sequence, input.issuedAt, input.storedFilename ?? "");
   const company = { ...input.company, showVatNumber: input.company.showVatNumber && input.company.vatNumber.trim().length > 0 };
-  const terms = QUOTATION_TERMS.map((term) => term.label === "Taxes / Duties" && input.exportQuote
-    ? { ...term, text: `${term.text} ${input.company.exportNote}`.trim() }
-    : term);
-  const banking = company.showBanking && company.accountNumber.trim()
-    ? {
-        bankName: company.bankName,
-        accountName: company.accountName,
-        accountNumber: company.accountNumber,
-        branchCode: company.branchCode,
-        accountType: company.accountType,
-        reference: numberLabel,
-      }
-    : null;
+  const terms = QUOTATION_TERMS;
+  const banking = {
+    bankName: QUOTATION_BANK.bankName,
+    accountName: "",
+    accountNumber: QUOTATION_BANK.accountNumber,
+    branchCode: QUOTATION_BANK.branchCode,
+    accountType: QUOTATION_BANK.accountType,
+    reference: numberLabel,
+  };
   const blocked = new Set((input.blockedReferenceUrls ?? []).map((url) => url.trim()).filter(Boolean));
   const references = input.mode === "FORMAL"
     ? input.references.map((url) => url.trim()).filter((url) => url.startsWith("https://") && !blocked.has(url))
@@ -209,19 +212,30 @@ export function buildQuotationDocument(input: {
     customerCompany: input.customerCompany.trim(),
     contactName: input.contactName.trim(),
     email: input.email.trim(),
-    customerReference: input.customerReference.trim(),
+    customerPhone: input.customerPhone?.trim() ?? "",
+    customerReference: customerRfqReference(input.customerReference, input.subject),
     deliveryLocation: input.deliveryLocation.trim(),
     subject: input.subject.trim(),
     company,
-    lines: input.lines.map((line, index) => ({
-      description: line.modelName.trim() || line.description.trim(),
-      configuration: shortConfiguration(line.specifications),
-      identity: [line.sku, line.manufacturerPartNumber].filter(Boolean).join(" · "),
-      quantity: line.quantity,
-      unitPriceCents: line.unitPriceCents,
-      lineTotalCents: lineTotalCents(line.quantity, line.unitPriceCents) ?? 0,
-      scheduleNumber: line.scheduleNumber?.trim() || String(index + 1),
-    })),
+    lines: input.lines.map((line, index) => {
+      const formatted = formatQuotationLine({
+        name: line.modelName,
+        description: line.description,
+        model: line.modelName,
+        specifications: line.specifications,
+        sku: line.sku,
+        manufacturerPartNumber: line.manufacturerPartNumber,
+      });
+      return {
+        description: formatted.primary,
+        configuration: shortConfiguration(formatted.detail),
+        identity: formatted.identifier,
+        quantity: line.quantity,
+        unitPriceCents: line.unitPriceCents,
+        lineTotalCents: lineTotalCents(line.quantity, line.unitPriceCents) ?? 0,
+        scheduleNumber: line.scheduleNumber?.trim() || String(index + 1),
+      };
+    }),
     ...totals,
     terms,
     banking,
@@ -229,6 +243,7 @@ export function buildQuotationDocument(input: {
     references,
     customerMessage: QUOTATION_CUSTOMER_MESSAGE,
     availability: QUOTATION_AVAILABILITY,
+    alternatives: input.lines.length > 1 && input.lines.every((line) => /^OPTION\s+\d+/i.test(line.description.trim()) && !line.modelName.trim()),
   };
 }
 
@@ -242,6 +257,90 @@ export function documentContainsInternalPricing(document: QuotationDocument) {
     subject: document.subject,
   }).toLowerCase();
   return /\b(markup|margin|supplier cost|sourceurl|stockfeed)\b/.test(text);
+}
+
+export function formatQuotationLine(input: {
+  name?: string;
+  description?: string;
+  model?: string;
+  specifications?: string;
+  sku?: string;
+  manufacturerPartNumber?: string;
+}) {
+  const name = collapseRepeated(input.name ?? "");
+  const description = collapseRepeated(input.description ?? "");
+  const model = collapseRepeated(input.model ?? "");
+  const specifications = collapseRepeated(input.specifications ?? "");
+  const primary = name || description || model || specifications;
+  const known = [primary, name, model].filter(Boolean);
+  const extras: string[] = [];
+  for (const candidate of [description, model, specifications]) {
+    const detail = stripKnown(candidate, known);
+    if (!detail || comparable(detail) === comparable(primary)) continue;
+    const existing = extras.findIndex((item) => comparable(item) === comparable(detail) || comparable(item).includes(comparable(detail)) || comparable(detail).includes(comparable(item)));
+    if (existing >= 0) {
+      if (detail.length > extras[existing].length) extras[existing] = detail;
+      continue;
+    }
+    extras.push(detail);
+  }
+  const sku = normaliseWhitespace(input.sku ?? "");
+  const partNumber = normaliseWhitespace(input.manufacturerPartNumber ?? "");
+  const prose = [primary, ...extras].filter(Boolean).join(" ");
+  const identifier = [
+    sku && !includesToken(prose, sku) ? `SKU: ${sku}` : "",
+    partNumber && partNumber.toLowerCase() !== sku.toLowerCase() && !includesToken(prose, partNumber) ? `MPN: ${partNumber}` : "",
+  ].filter(Boolean).join("\n");
+  return { primary, detail: extras.join("\n"), identifier };
+}
+
+function customerRfqReference(reference: string, subject: string) {
+  const values = [normaliseWhitespace(reference), normaliseWhitespace(subject)].filter(Boolean);
+  return values.filter((value, index) => values.findIndex((item) => comparable(item) === comparable(value)) === index).join(" — ");
+}
+
+function normaliseWhitespace(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function comparable(value: string) {
+  return normaliseWhitespace(value).toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function collapseRepeated(value: string) {
+  const clean = normaliseWhitespace(value);
+  if (!clean) return "";
+  const words = clean.split(" ");
+  for (let size = 1; size <= Math.floor(words.length / 2); size += 1) {
+    if (words.length % size !== 0) continue;
+    const phrase = words.slice(0, size).join(" ");
+    const repeats = words.length / size;
+    if (repeats < 2) continue;
+    if (Array.from({ length: repeats }, () => phrase).join(" ").toLowerCase() === clean.toLowerCase()) return phrase;
+  }
+  return clean;
+}
+
+function stripKnown(value: string, known: string[]) {
+  let rest = collapseRepeated(value);
+  if (!rest) return "";
+  for (const item of known.map((entry) => collapseRepeated(entry)).filter((entry) => entry.length >= 8)) {
+    if (comparable(rest) === comparable(item)) return "";
+    const pattern = new RegExp(escapeRegExp(item), "ig");
+    const next = collapseRepeated(normaliseWhitespace(rest.replace(pattern, " ")));
+    if (!next || comparable(next) === comparable(rest)) continue;
+    rest = next;
+  }
+  return /[a-z0-9]/i.test(rest) ? rest : "";
+}
+
+function includesToken(haystack: string, token: string) {
+  const needle = comparable(token);
+  return needle.length > 0 && comparable(haystack).includes(needle);
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function shortConfiguration(value: string) {
@@ -336,6 +435,6 @@ function readSpecs(text: string) {
   };
 }
 
-export function moneyLabel(cents: number, currency: string) {
-  return formatCents(cents, currency);
+export function moneyLabel(cents: number) {
+  return formatCurrency(cents / 100);
 }

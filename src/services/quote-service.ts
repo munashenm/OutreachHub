@@ -3,7 +3,7 @@ import { getDb, isUniqueViolation } from "../lib/db";
 import { AppError } from "../lib/errors";
 import { parseMoneyToCents, parseQuantity, quoteValidUntil, snapshotQuoteLine } from "../lib/quote";
 import { quoteMarginBlock, sellMarginPercent } from "../lib/stock";
-import { quoteCoverEmail, quotationEmailSubject, urbanFocusQuoteNumber } from "../lib/quotation-document";
+import { quoteCoverEmail } from "../lib/quotation-document";
 import { ownedByWorkspace } from "../lib/gmail-sync";
 import { recordActivity } from "./activity-service";
 import { getRfq } from "./rfq-service";
@@ -177,20 +177,19 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
   if (prepared.number == null || prepared.issuedAt == null || prepared.validUntil == null) {
     throw new AppError("The quotation number could not be assigned.");
   }
-  const quoteNumber = prepared.number;
-  const quoteIssuedAt = prepared.issuedAt;
   const pdf = await generateQuotePdf(actor.workspaceId, prepared.id, {
     mode: terms.documentMode === "FORMAL" ? "FORMAL" : "STANDARD",
     exportQuote: terms.exportQuote === true,
     references: terms.references ?? "",
   });
   const customerName = rfq.prospect ? `${rfq.prospect.firstName} ${rfq.prospect.lastName}`.trim() : rfq.sourceMessage.fromName ?? "";
+  const quoteNumberLabel = pdf.filename.replace(/\.pdf$/i, "");
   const body = quoteCoverEmail({
     customerName,
-    quoteNumber: urbanFocusQuoteNumber(quoteNumber, quoteIssuedAt),
+    quoteNumber: quoteNumberLabel,
     validUntil: prepared.validUntil,
   });
-  const subject = quotationEmailSubject(quoteNumber, quoteIssuedAt);
+  const subject = `Quotation ${quoteNumberLabel}`;
   const claimed = await claimQuoteSend({ quoteId: quote.id, rfqId: rfq.id, recipient: to, subject, version: 1 });
   if (!claimed) return;
   await getDb().rfq.update({ where: { id: rfq.id }, data: { status: "SENDING" } });
@@ -231,7 +230,7 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
       prospectId: rfq.prospectId,
       companyId: rfq.companyId,
       type: "QUOTE_SENT",
-      summary: `Sent quotation ${urbanFocusQuoteNumber(quoteNumber, quoteIssuedAt)} for “${rfq.subject}”.`,
+      summary: `Sent quotation ${quoteNumberLabel} for “${rfq.subject}”.`,
     });
     await queueStockForWebsite(tx, actor.workspaceId, prepared.lines.map((line) => line.productId ?? ""));
   });
