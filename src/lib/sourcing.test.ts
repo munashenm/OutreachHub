@@ -8,6 +8,7 @@ import {
   extractProductRequirements,
   landedCostCents,
   planSourcing,
+  requirementIsVague,
   requirementSummary,
   requirementsFromSources,
   type SourcingCandidate,
@@ -419,6 +420,36 @@ test("test B quotes a catalogue laptop that meets the specification", () => {
   assert.equal(plan.options[0]?.quantity, 2);
   assert.equal(plan.options[0]?.unitPriceCents, 2_280_000);
   assert.equal(plan.options[0]?.sourceKind, "URBAN_FOCUS_CATALOGUE");
+});
+
+test("a recommendation email keeps the stated minimums and does not ask the customer to choose a model", () => {
+  const [requirement] = extractProductRequirements(`RFQ TEST – Programming Laptops Recommendation
+Good day,
+Please quote 2 laptop computers for programming and technical/engineering work.
+No specific manufacturer or model is required.
+Please recommend two suitable business/professional options at different price levels.
+Each option should preferably include:
+- at least 16GB RAM
+- at least 512GB SSD
+- Windows 11 Pro
+Please include stock availability, lead time and warranty.
+Regards,
+Munashe`);
+  assert.equal(requirement?.productType, "Laptop");
+  assert.equal(requirement?.quantity, 2);
+  assert.equal(requirement?.ramGb, 16);
+  assert.equal(requirement?.storageGb, 512);
+  assert.equal(requirement?.operatingSystem, "Windows 11 Pro");
+  assert.equal(requirementIsVague(requirement!), false);
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: emptyPools(),
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "SOURCING");
+  if (plan.kind !== "SOURCING") return;
+  assert.doesNotMatch(plan.message, /make and model|attachment/i);
 });
 
 test("test C quotes two professional laptops at different prices", () => {

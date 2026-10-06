@@ -149,6 +149,11 @@ export function extractProductRequirements(body: string): ProductRequirement[] {
       continue;
     }
     if (isRequestLine(line)) {
+      const continues = current.length > 0 && /\b((?:please\s+)?recommend|suitable options?|different price levels?)\b/i.test(line) && !/\b(?:quote|need|pricing|rfq)\b/i.test(line);
+      if (continues) {
+        current.push(line);
+        continue;
+      }
       flush();
       current = [line];
       continue;
@@ -626,7 +631,7 @@ function usableCandidate(candidate: SourcingCandidate, now: Date, freshnessMs: n
 }
 
 function isRequestLine(line: string) {
-  if (/\b(recommend(?:ation)?s?|suitable options?|or equivalent)\b/i.test(line)) return true;
+  if (/\b((?:please\s+)?recommend|suitable options?|or equivalent)\b/i.test(line)) return true;
   return (/\b(?:quote|need|pricing|rfq)\b/i.test(line) && hasQuantity(line)) || /^\s*\d+\s*[x×]\b/i.test(line);
 }
 

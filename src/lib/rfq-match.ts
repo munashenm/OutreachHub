@@ -1,7 +1,7 @@
 export type RequestStrictness = "EXACT" | "EQUIVALENT_ALLOWED" | "RECOMMENDATION";
 
 export function isRecommendationRequest(text: string) {
-  return /\b(recommend(?:ation)?s?|no specific (?:make|model|brand)|suitable options?|different price levels?)\b/i.test(text);
+  return /\b(recommend(?:ation)?s?|no specific (?:make|model|brand|manufacturer)|suitable options?|different price levels?)\b/i.test(text);
 }
 
 export function equivalentsAllowed(text: string) {
