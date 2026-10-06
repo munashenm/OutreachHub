@@ -214,6 +214,27 @@ export function isSourcingFresh(checkedAt: Date, now: Date, maxAgeMs: number) {
   return now.getTime() - checkedAt.getTime() <= maxAgeMs && now.getTime() >= checkedAt.getTime();
 }
 
+export const SUPPLIER_COST_QUOTE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+export function catalogueCommercialState(input: {
+  stockOnHand: number;
+  listedPriceCents: number;
+  costCents: number | null;
+  costKnown: boolean;
+  costUpdatedAt: Date | null;
+  nowMs: number;
+}) {
+  const costAgeOk = input.costUpdatedAt != null && input.nowMs - input.costUpdatedAt.getTime() <= SUPPLIER_COST_QUOTE_WINDOW_MS;
+  const costUsable = input.costKnown && (input.costCents ?? 0) > 0 && costAgeOk;
+  return {
+    fresh: input.stockOnHand > 0,
+    stockQty: input.stockOnHand,
+    stockKnown: true,
+    costExVatCents: costUsable ? input.costCents : null,
+    listedPriceCents: input.listedPriceCents > 0 ? input.listedPriceCents : null,
+  };
+}
+
 export function exclusiveFromListed(listedPriceCents: number, vatIncluded: boolean) {
   if (!Number.isInteger(listedPriceCents) || listedPriceCents <= 0) return null;
   return vatIncluded ? Math.round((listedPriceCents * 100) / 115) : listedPriceCents;

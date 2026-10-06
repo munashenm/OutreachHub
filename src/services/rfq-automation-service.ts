@@ -24,7 +24,7 @@ import { recordActivity } from "./activity-service";
 import { extractQuotationFields } from "./ai-service";
 import { sendQuote } from "./quote-service";
 import { sendCustomerResponse } from "./reply-service";
-import { extractProductRequirements, planSourcing, QUANTITY_CLARIFICATION, requirementAwaitingQuantity, requirementSummary, requirementsFromSources, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
+import { catalogueCommercialState, extractProductRequirements, planSourcing, QUANTITY_CLARIFICATION, requirementAwaitingQuantity, requirementSummary, requirementsFromSources, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
 import { sourceExternalForRequirements } from "./external-sourcing-service";
 import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp, unpricedCatalogueNote } from "./sales-response-service";
 import { analyseRfqDocuments, analysisTextForRfq, listTenderAnalyses, responseModeForRfq, saveAnalysisMatches } from "./document-analysis-service";
@@ -652,7 +652,14 @@ export async function sourcingPools(workspaceId: string): Promise<SourcingPools>
   }
   const catalogue: SourcingCandidate[] = products.map((product) => {
     const offer = bestOffer.get(product.id);
-    const fresh = offer ? now - offer.updatedAt.getTime() <= offer.supplier.priceSyncIntervalMinutes * 60 * 1000 : false;
+    const commercial = catalogueCommercialState({
+      stockOnHand: product.stockOnHand,
+      listedPriceCents: product.unitPriceCents,
+      costCents: offer?.costCents ?? null,
+      costKnown: offer?.costKnown ?? false,
+      costUpdatedAt: offer?.updatedAt ?? null,
+      nowMs: now,
+    });
     return {
       sourceKind: "URBAN_FOCUS_CATALOGUE",
       sourceName: "Urban Focus",
@@ -665,19 +672,20 @@ export async function sourcingPools(workspaceId: string): Promise<SourcingPools>
       sku: product.sku,
       mpn: product.manufacturerPartNumber,
       specifications: product.specifications || product.name,
-      costExVatCents: offer?.costCents ?? null,
-      listedPriceCents: product.unitPriceCents > 0 ? product.unitPriceCents : null,
+      costExVatCents: commercial.costExVatCents,
+      listedPriceCents: commercial.listedPriceCents,
       vatIncluded: false,
       shippingCents: 0,
       procurementCents: 0,
       importCents: 0,
       riskPercent: 0,
       markupPercent: offer?.supplier.markupPercent ?? 0,
-      stockQty: offer?.stockKnown ? offer.stockQty : product.stockOnHand,
-      stockKnown: offer ? offer.stockKnown : true,
-      fresh: offer ? fresh : product.stockOnHand > 0,
+      stockQty: commercial.stockQty,
+      stockKnown: commercial.stockKnown,
+      fresh: commercial.fresh,
       checkedAt: offer?.updatedAt.toISOString() ?? null,
       reputable: true,
+      supplierClass: offer ? classFromScorecard(offer.supplier.scorecard) : undefined,
     };
   });
   const supplierFeeds: SourcingCandidate[] = [];
