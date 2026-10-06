@@ -353,6 +353,7 @@ test("test A quotes an exact catalogue SKU", () => {
     model: "21QC000YZA",
     productId: "t14",
     listedPriceCents: 4_085_000,
+    costExVatCents: 2_000_000,
     specifications: "Ultra 7, 16GB RAM, 512GB SSD, Windows 11 Pro",
   });
   const other = catalogueLaptop({
@@ -392,6 +393,7 @@ test("test B quotes a catalogue laptop that meets the specification", () => {
     model: "",
     productId: "hp",
     listedPriceCents: 2_280_000,
+    costExVatCents: 1_200_000,
     specifications: "HP ProBook 4 G1iR Core 5 16GB 512GB Windows 11 Pro",
   });
   const thinkpad = catalogueLaptop({
@@ -400,6 +402,7 @@ test("test B quotes a catalogue laptop that meets the specification", () => {
     model: "21QC000YZA",
     productId: "t14",
     listedPriceCents: 4_085_000,
+    costExVatCents: 2_000_000,
     specifications: "Lenovo ThinkPad T14 Gen 6 Ultra 7 16GB 512GB Windows 11 Pro",
   });
   const plan = planSourcing({
@@ -426,6 +429,7 @@ test("test C quotes two professional laptops at different prices", () => {
     model: "",
     productId: "hp",
     listedPriceCents: 2_280_000,
+    costExVatCents: 1_200_000,
     specifications: "HP ProBook 4 G1iR Core 5 16GB 512GB Windows 11 Pro",
   });
   const thinkpad = catalogueLaptop({
@@ -434,6 +438,7 @@ test("test C quotes two professional laptops at different prices", () => {
     model: "21QC000YZA",
     productId: "t14",
     listedPriceCents: 4_085_000,
+    costExVatCents: 2_000_000,
     specifications: "Lenovo ThinkPad T14 Gen 6 Ultra 7 16GB 512GB Windows 11 Pro",
   });
   const consumer = catalogueLaptop({
@@ -580,6 +585,7 @@ test("UF-TEST-001 is quoted at the requested quantity", () => {
     productId: "uf-test",
     stockQty: 10,
     listedPriceCents: 1_500_000,
+    costExVatCents: 900_000,
   });
   const plan = planSourcing({
     requirements: [requirement!],
@@ -593,6 +599,30 @@ test("UF-TEST-001 is quoted at the requested quantity", () => {
   assert.equal(plan.options[0]?.quantity, 2);
   assert.equal(plan.options[0]?.unitPriceCents, 1_500_000);
   assert.equal(plan.send, true);
+});
+
+test("a catalogue selling price without a supplier cost is quoted and not auto-sent", () => {
+  const [requirement] = extractProductRequirements("Please quote 2 × UF-TEST-001");
+  const exact = catalogueLaptop({
+    name: "Urban Focus test laptop",
+    sku: "UF-TEST-001",
+    model: "UF-TEST-001",
+    productId: "uf-test",
+    stockQty: 10,
+    listedPriceCents: 1_500_000,
+    costExVatCents: null,
+  });
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [exact] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "QUOTE");
+  if (plan.kind !== "QUOTE") return;
+  assert.equal(plan.options[0]?.unitPriceCents, 1_500_000);
+  assert.equal(plan.options[0]?.costStatus, "NEEDS_REVIEW");
+  assert.equal(plan.send, false);
 });
 
 test("partial stock does not claim the full quantity is available", () => {

@@ -223,6 +223,16 @@ export async function getGmailMessage(accessToken: string, id: string): Promise<
   return json.id ? json : null;
 }
 
+export async function searchGmailIds(accessToken: string, query: string) {
+  const params = new URLSearchParams({ q: query, maxResults: "5" });
+  const response = await fetch(`${GMAIL}/messages?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) return null;
+  const json = (await response.json()) as { messages?: { id: string }[] };
+  return (json.messages ?? []).map((message) => message.id);
+}
+
 export async function listRecentGmailIds(accessToken: string) {
   const params = new URLSearchParams({
     q: "newer_than:14d -in:spam -in:trash",

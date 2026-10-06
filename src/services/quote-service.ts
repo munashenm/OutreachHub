@@ -13,6 +13,9 @@ import { recordFunnel, scheduleQuoteFollowUp } from "./sales-response-service";
 import { markAnalysisApproved, responseModeForRfq } from "./document-analysis-service";
 import { queueStockForWebsite } from "./stock-sync-service";
 import { lowestCostsByProduct } from "./supplier-service";
+import { accessTokenForMailbox } from "./mailbox-service";
+import { searchGmailIds } from "./google-service";
+import { classifySendFailure, quoteSendKey } from "../lib/quote-send";
 import type { Actor } from "./types";
 
 export async function quotesForRfq(workspaceId: string, rfqId: string) {
@@ -118,8 +121,6 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
   if (!rfq) throw new AppError("RFQ not found.", 404, "NOT_FOUND");
   const alreadySent = await getDb().quote.findFirst({ where: { workspaceId: actor.workspaceId, rfqId: rfq.id, status: "SENT" }, select: { id: true } });
   if (alreadySent) return;
-  const sendLock = await getDb().rfqOutboundKey.findFirst({ where: { rfqId: rfq.id, key: { startsWith: "QUOTE_SEND:" } }, select: { id: true } });
-  if (sendLock) return;
   if (await responseModeForRfq(rfq.id) === "TENDER_PACKAGE") throw new AppError("This tender requires the official submission method. An email quotation was not sent.");
   const quote = await getDb().quote.findFirst({
     where: { workspaceId: actor.workspaceId, rfqId: rfq.id, status: "DRAFT" },
@@ -189,28 +190,36 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
     quoteNumber: urbanFocusQuoteNumber(quoteNumber, quoteIssuedAt),
     validUntil: prepared.validUntil,
   });
-  const sendKey = `QUOTE_SEND:${quote.id}:1`;
-  const existingSend = await getDb().rfqOutboundKey.findUnique({ where: { key: sendKey } });
-  if (existingSend) return;
-  try {
-    await getDb().rfqOutboundKey.create({ data: { key: sendKey, rfqId: rfq.id } });
-  } catch (error) {
-    if (isUniqueViolation(error)) return;
-    throw error;
-  }
+  const subject = quotationEmailSubject(quoteNumber, quoteIssuedAt);
+  const claimed = await claimQuoteSend({ quoteId: quote.id, rfqId: rfq.id, recipient: to, subject, version: 1 });
+  if (!claimed) return;
   await getDb().rfq.update({ where: { id: rfq.id }, data: { status: "SENDING" } });
+  let gmailMessageId = "";
   try {
-    await sendCustomerResponse(actor, {
+    const sentMessage = await sendCustomerResponse(actor, {
       messageId: rfq.sourceMessageId,
       to,
       cc: "",
-      subject: quotationEmailSubject(quoteNumber, quoteIssuedAt),
+      subject,
       body,
       attachments: [{ filename: pdf.filename, contentType: "application/pdf", data: pdf.bytes }],
     });
+    gmailMessageId = sentMessage.externalId ?? "";
+    await getDb().quoteSendAttempt.update({
+      where: { idempotencyKey: quoteSendKey(quote.id, 1) },
+      data: { status: "SENT", gmailMessageId, completedAt: new Date(), lastError: "" },
+    });
   } catch (error) {
-    await getDb().rfqOutboundKey.deleteMany({ where: { key: sendKey } });
-    await getDb().rfq.update({ where: { id: rfq.id }, data: { status: "QUOTE_READY", lastError: "The quotation email could not be sent. It can be retried." } });
+    const outcome = classifySendFailure(error);
+    const reason = error instanceof Error ? error.message.slice(0, 300) : "The quotation email could not be sent.";
+    await getDb().quoteSendAttempt.update({
+      where: { idempotencyKey: quoteSendKey(quote.id, 1) },
+      data: { status: outcome, lastError: reason, completedAt: outcome === "FAILED_CONFIRMED" ? new Date() : null },
+    });
+    await getDb().rfq.update({
+      where: { id: rfq.id },
+      data: { status: "QUOTE_READY", lastError: outcome === "UNKNOWN" ? "The quotation send did not return a result. It will be checked before another email is sent." : reason },
+    });
     throw error;
   }
   await getDb().$transaction(async (tx) => {
@@ -240,4 +249,69 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
   const marginPercent = margins.length === 0 ? null : Math.round(margins.reduce((sum, margin) => sum + margin, 0) / margins.length);
   await recordFunnel({ workspaceId: actor.workspaceId, rfqId: rfq.id, status: "QUOTE_SENT", valueCents: Math.round(valueCents), marginPercent });
   await markAnalysisApproved(actor, rfq.id);
+}
+
+async function claimQuoteSend(input: { quoteId: string; rfqId: string; recipient: string; subject: string; version: number }) {
+  const db = getDb();
+  const key = quoteSendKey(input.quoteId, input.version);
+  const existing = await db.quoteSendAttempt.findUnique({ where: { idempotencyKey: key } });
+  if (existing?.status === "SENT") return false;
+  const stale = existing?.status === "SENDING" && existing.startedAt != null && Date.now() - existing.startedAt.getTime() >= 2 * 60_000;
+  if (existing?.status === "SENDING" && !stale) return false;
+  if (existing && (existing.status === "UNKNOWN" || stale)) {
+    const found = await findAlreadySentQuotation(input.recipient, input.subject);
+    if (found === "inconclusive") return false;
+    if (found) {
+      await db.quoteSendAttempt.update({
+        where: { idempotencyKey: key },
+        data: { status: "SENT", gmailMessageId: found, completedAt: new Date(), lastError: "" },
+      });
+      await db.quote.updateMany({ where: { id: input.quoteId, status: "DRAFT" }, data: { status: "SENT", sentAt: new Date() } });
+      await db.rfq.updateMany({ where: { id: input.rfqId }, data: { status: "SENT", lastError: "" } });
+      return false;
+    }
+  }
+  if (!existing) {
+    try {
+      await db.quoteSendAttempt.create({
+        data: {
+          idempotencyKey: key,
+          quoteId: input.quoteId,
+          quoteVersion: input.version,
+          rfqId: input.rfqId,
+          recipient: input.recipient,
+          status: "SENDING",
+          attemptCount: 1,
+          startedAt: new Date(),
+        },
+      });
+      return true;
+    } catch (error) {
+      if (isUniqueViolation(error)) return false;
+      throw error;
+    }
+  }
+  const claimed = await db.quoteSendAttempt.updateMany({
+    where: { idempotencyKey: key, status: { in: ["FAILED_CONFIRMED", "UNKNOWN", "SENDING", "PENDING"] } },
+    data: { status: "SENDING", attemptCount: { increment: 1 }, startedAt: new Date(), lastError: "", completedAt: null },
+  });
+  return claimed.count === 1;
+}
+
+async function findAlreadySentQuotation(recipient: string, subject: string) {
+  const mailbox = await getDb().mailbox.findFirst({
+    where: { provider: "GOOGLE", connectionStatus: "CONNECTED" },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true, workspaceId: true },
+  });
+  if (!mailbox) return "inconclusive" as const;
+  try {
+    const access = await accessTokenForMailbox(mailbox.id, mailbox.workspaceId);
+    const safeSubject = subject.replaceAll("\"", "");
+    const ids = await searchGmailIds(access.token, `in:sent to:${recipient} subject:"${safeSubject}" newer_than:14d`);
+    if (ids == null) return "inconclusive" as const;
+    return ids[0] ?? null;
+  } catch {
+    return "inconclusive" as const;
+  }
 }

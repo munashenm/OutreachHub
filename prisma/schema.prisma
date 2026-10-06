@@ -504,6 +504,7 @@ model Rfq {
   analyses      TenderAnalysis[]
   events        RfqEvent[]
   outboundKeys  RfqOutboundKey[]
+  sendAttempts  QuoteSendAttempt[]
 
   @@index([workspaceId, status])
   @@index([workspaceId, createdAt])
@@ -524,6 +525,29 @@ model RfqEvent {
   rfq Rfq @relation(fields: [rfqId], references: [id], onDelete: Cascade)
 
   @@index([rfqId, createdAt])
+}
+
+model QuoteSendAttempt {
+  id              String    @id @default(cuid())
+  idempotencyKey  String    @unique
+  quoteId         String
+  quoteVersion    Int       @default(1)
+  rfqId           String
+  recipient       String    @default("")
+  status          String    @default("PENDING")
+  gmailMessageId  String    @default("")
+  attemptCount    Int       @default(0)
+  startedAt       DateTime?
+  completedAt     DateTime?
+  lastError       String    @default("")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  quote Quote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  rfq   Rfq   @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+
+  @@index([rfqId])
+  @@index([quoteId])
 }
 
 model RfqOutboundKey {
@@ -636,6 +660,7 @@ model Quote {
   workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   rfq       Rfq         @relation(fields: [rfqId], references: [id], onDelete: Cascade)
   lines     QuoteLine[]
+  sendAttempts QuoteSendAttempt[]
 
   @@unique([workspaceId, number])
   @@index([workspaceId, rfqId])
@@ -1084,6 +1109,9 @@ model InboundMessageProcessing {
   autoReplySentAt  DateTime?
   quoteId          String    @default("")
   processedAt      DateTime?
+  attemptCount     Int       @default(0)
+  nextRetryAt      DateTime?
+  lastError        String    @default("")
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
