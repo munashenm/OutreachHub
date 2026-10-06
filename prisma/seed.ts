@@ -2,7 +2,8 @@ import "dotenv/config";
 import bcrypt from "bcryptjs";
 import { getDb } from "../src/lib/db";
 
-const demoEmail = "demo@outreachhub.example";
+const demoEmail = "sales@cyberdevelopers.co.za";
+const demoPassword = "23846423";
 
 async function main() {
   if (process.env.NODE_ENV === "production" && process.env.SEED_DEMO !== "true") {
@@ -10,13 +11,23 @@ async function main() {
     return;
   }
   const db = getDb();
+  const passwordHash = await bcrypt.hash(demoPassword, 12);
   const existing = await db.workspace.findUnique({ where: { slug: "demo-workspace" } });
   if (existing) {
-    console.log("Demo workspace already exists. Skipping.");
+    const owner = await db.membership.findFirst({
+      where: { workspaceId: existing.id, role: "OWNER" },
+    });
+    if (owner) {
+      await db.user.update({
+        where: { id: owner.userId },
+        data: { email: demoEmail, passwordHash },
+      });
+    }
+    console.log("Demo workspace already exists. Login updated.");
+    console.log(`Email: ${demoEmail}`);
+    console.log(`Password: ${demoPassword}`);
     return;
   }
-
-  const passwordHash = await bcrypt.hash("Demo-password-123", 12);
   const user = await db.user.create({
     data: { name: "Demo User", email: demoEmail, passwordHash },
   });
@@ -124,7 +135,7 @@ async function main() {
 
   console.log("Demo workspace created.");
   console.log(`Email: ${demoEmail}`);
-  console.log("Password: Demo-password-123");
+  console.log(`Password: ${demoPassword}`);
 }
 
 main()

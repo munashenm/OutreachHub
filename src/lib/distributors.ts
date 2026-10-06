@@ -4,11 +4,11 @@ export type DistributorPreset = {
   notes: string;
 };
 
-const FEED_LATER = "The feed stays off until this distributor provides a price-list address.";
+const FEED_LATER = "Automatic sync stays off until a price-list address is saved. A CSV, XML, or XLSX file can be uploaded instead.";
 
 export const SOUTH_AFRICAN_DISTRIBUTORS: DistributorPreset[] = [
   { name: "Miro", country: "South Africa", notes: FEED_LATER },
-  { name: "Scoop", country: "South Africa", notes: "Use the Scoop CSV or XML price list. The dealer price excluding VAT is the cost. The feed stays off until that address is saved." },
+  { name: "Scoop", country: "South Africa", notes: "Scoop uses its own CSV or XML price list. The dealer price excluding VAT is the cost, and total stock is the available quantity. Another supplier does not use these columns." },
   { name: "Pinnacle", country: "South Africa", notes: FEED_LATER },
   { name: "Frontosa", country: "South Africa", notes: "Frontosa uses its catalogue and stock JSON feeds and needs a token. The feed stays off until that token is saved." },
   { name: "SMD Technologies", country: "South Africa", notes: FEED_LATER },

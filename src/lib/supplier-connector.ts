@@ -15,6 +15,8 @@ export type SupplierOffer = {
   category: string;
   leadTimeDays: number | null;
   matchSkus: string[];
+  barcode?: string;
+  productUrl?: string;
 };
 
 export type SupplierFieldMapping = {
@@ -30,6 +32,9 @@ export type SupplierFieldMapping = {
   imageUrls?: string;
   category?: string;
   leadTimeDays?: string;
+  barcode?: string;
+  productUrl?: string;
+  costInclusive?: string;
 };
 
 export type ParsedSupplierFeed = {
@@ -52,6 +57,9 @@ const FIELD_KEYS = [
   "imageUrls",
   "category",
   "leadTimeDays",
+  "barcode",
+  "productUrl",
+  "costInclusive",
 ] as const;
 
 const MPN_FIELDS = ["manufacturerPartNumber", "manufacturer_part_number", "mpn", "partNumber", "part_number"];
@@ -64,6 +72,9 @@ const SPEC_FIELDS = ["specifications", "specs"];
 const IMAGE_FIELDS = ["imageUrls", "images", "image", "imageUrl", "image_url"];
 const CATEGORY_FIELDS = ["category"];
 const LEAD_FIELDS = ["leadTimeDays", "lead_time_days", "leadTime", "lead_time"];
+const BARCODE_FIELDS = ["barcode", "ean", "gtin", "upc"];
+const PRODUCT_URL_FIELDS = ["productUrl", "product_url", "url", "link"];
+const COST_INCLUSIVE_FIELDS = ["costInclusive", "costIncl", "priceIncl", "cost_incl_vat", "price_incl_vat"];
 const PRODUCT_TAGS = ["product", "item", "offer"];
 const TAG_NAME = /^[A-Za-z_][A-Za-z0-9_.:-]*$/;
 
@@ -171,13 +182,29 @@ export function parseJsonOffers(body: unknown, mapping: SupplierFieldMapping = {
 }
 
 export function parseXmlOffers(xml: string, mapping: SupplierFieldMapping = {}): ParsedSupplierFeed {
-  if (/<!DOCTYPE/i.test(xml)) return { offers: [], skipped: 0, error: "The XML feed cannot use a document type." };
+  const table = xmlProductRecords(xml, mapping.productElement);
+  if (table.error) return { offers: [], skipped: 0, error: table.error };
+  return offersFromCsvRecords(table.records, mapping);
+}
+
+export function xmlProductRecords(xml: string, productElement = ""): { headers: string[]; records: Record<string, string>[]; error: string | null } {
+  if (/<!DOCTYPE/i.test(xml)) return { headers: [], records: [], error: "The XML file cannot use a document type." };
   const cleaned = xml.replace(/^\uFEFF/, "").replace(/<!--[\s\S]*?-->/g, "");
-  const tag = mapping.productElement?.trim() || PRODUCT_TAGS.find((name) => elements(cleaned, name).length > 0) || "";
-  if (!tag || !TAG_NAME.test(tag)) return { offers: [], skipped: 0, error: "The XML feed has no product element." };
+  const tag = productElement.trim() || PRODUCT_TAGS.find((name) => elements(cleaned, name).length > 0) || "";
+  if (!tag || !TAG_NAME.test(tag)) return { headers: [], records: [], error: "The XML file has no product element." };
   const blocks = elements(cleaned, tag);
-  if (blocks.length === 0) return { offers: [], skipped: 0, error: "The XML feed has no product element." };
-  return collectOffers(blocks.map((block) => offerFromRecord(xmlRecord(block, tag), mapping)));
+  if (blocks.length === 0) return { headers: [], records: [], error: "The XML file has no product element." };
+  const records = blocks.map((block) => {
+    const source = xmlRecord(block, tag);
+    const record: Record<string, string> = {};
+    for (const [key, value] of Object.entries(source)) {
+      if (Array.isArray(value)) record[key] = value.map((entry) => text(entry)).filter(Boolean).join("|");
+      else record[key] = text(value);
+    }
+    return record;
+  });
+  const headers = [...new Set(records.flatMap((record) => Object.keys(record)))];
+  return { headers, records, error: null };
 }
 
 export function parseCsvOffers(text: string, mapping: SupplierFieldMapping = {}): ParsedSupplierFeed {
@@ -216,8 +243,14 @@ function offerFromRecord(record: Record<string, unknown> | null, mapping: Suppli
   const manufacturerPartNumber = clip(text(valueFor(record, mapping, "manufacturerPartNumber", MPN_FIELDS)), 80);
   if (!identified.supplierSku && !manufacturerPartNumber) return null;
   const costValue = valueFor(record, mapping, "cost", COST_FIELDS);
-  const costCents = money(costValue);
+  let costCents = money(costValue);
   if (present(costValue) && costCents === null) return null;
+  if (!present(costValue)) {
+    const inclusiveValue = valueFor(record, mapping, "costInclusive", COST_INCLUSIVE_FIELDS);
+    const inclusiveCents = money(inclusiveValue);
+    if (present(inclusiveValue) && inclusiveCents === null) return null;
+    if (inclusiveCents !== null) costCents = exclusiveCostCents(inclusiveCents, "INCLUSIVE");
+  }
   const stockValue = valueFor(record, mapping, "stock", STOCK_FIELDS);
   const stockQty = quantity(stockValue);
   if (present(stockValue) && stockQty === null) return null;
@@ -237,6 +270,8 @@ function offerFromRecord(record: Record<string, unknown> | null, mapping: Suppli
     category: clip(text(valueFor(record, mapping, "category", CATEGORY_FIELDS)), 80),
     leadTimeDays,
     matchSkus: identified.matchSkus,
+    barcode: clip(text(valueFor(record, mapping, "barcode", BARCODE_FIELDS)), 80),
+    productUrl: productAddress(valueFor(record, mapping, "productUrl", PRODUCT_URL_FIELDS)),
   };
 }
 
@@ -291,7 +326,11 @@ function clip(value: string, max: number) {
 function money(value: unknown) {
   if (!present(value)) return null;
   if (typeof value === "number" && Number.isFinite(value)) return parseMoneyToCents(value.toFixed(2));
-  return parseMoneyToCents(text(value));
+  let raw = text(value).replace(/zar/gi, "").replace(/\s/g, "").replace(/^r/i, "");
+  if (raw.includes(".") && raw.includes(",")) raw = raw.replace(/,/g, "");
+  else if (/^\d{1,3}(,\d{3})+$/.test(raw)) raw = raw.replace(/,/g, "");
+  else raw = raw.replace(",", ".");
+  return parseMoneyToCents(raw);
 }
 
 function quantity(value: unknown) {
@@ -306,6 +345,16 @@ function leadDays(value: unknown) {
   const parsed = typeof value === "number" ? value : Number(text(value));
   if (!Number.isInteger(parsed) || parsed < 0 || parsed > 365) return null;
   return parsed;
+}
+
+function productAddress(value: unknown) {
+  const line = text(value);
+  if (!line) return "";
+  try {
+    return assertPublicHttpsUrl(line).href.slice(0, 500);
+  } catch {
+    return "";
+  }
 }
 
 function imageList(value: unknown) {
