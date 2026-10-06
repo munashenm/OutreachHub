@@ -22,7 +22,7 @@ Open http://localhost:3000 and create a workspace. Optional demo data:
 npm run db:seed
 ```
 
-The demo login is `demo@outreachhub.example` / `Demo-password-123`. The workspace is named Demo Workspace and flagged as demo data.
+The demo login is `sales@cyberdevelopers.co.za` / `23846423`. The workspace is named Demo Workspace and flagged as demo data.
 
 `docker-compose.yml` starts PostgreSQL if Docker is available.
 
