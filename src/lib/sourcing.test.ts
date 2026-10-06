@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  catalogueCommercialState,
   CLARIFICATION_REPLY,
   compareRequirement,
   exclusiveFromListed,
@@ -599,6 +600,32 @@ test("UF-TEST-001 is quoted at the requested quantity", () => {
   assert.equal(plan.options[0]?.quantity, 2);
   assert.equal(plan.options[0]?.unitPriceCents, 1_500_000);
   assert.equal(plan.send, true);
+});
+
+test("a supplier cost from the last day still prices a catalogue product after the sync interval", () => {
+  const nowMs = Date.parse("2026-10-06T20:12:00.000Z");
+  const recent = catalogueCommercialState({
+    stockOnHand: 1142,
+    listedPriceCents: 10000,
+    costCents: 3200,
+    costKnown: true,
+    costUpdatedAt: new Date("2026-10-06T19:00:00.000Z"),
+    nowMs,
+  });
+  assert.equal(recent.fresh, true);
+  assert.equal(recent.stockQty, 1142);
+  assert.equal(recent.costExVatCents, 3200);
+  const stale = catalogueCommercialState({
+    stockOnHand: 1142,
+    listedPriceCents: 10000,
+    costCents: 3200,
+    costKnown: true,
+    costUpdatedAt: new Date("2026-10-04T18:00:00.000Z"),
+    nowMs,
+  });
+  assert.equal(stale.fresh, true);
+  assert.equal(stale.costExVatCents, null);
+  assert.equal(stale.listedPriceCents, 10000);
 });
 
 test("a catalogue selling price without a supplier cost is quoted and not auto-sent", () => {
