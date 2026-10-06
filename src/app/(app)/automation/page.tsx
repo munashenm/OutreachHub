@@ -16,9 +16,9 @@ export default async function AutomationPage() {
         <StatCard label="Inbound messages" value={report.inbound} hint="Messages stored from the mailbox." />
         <StatCard label="Acknowledgements sent" value={report.acknowledgements} hint="One acknowledgement is kept per RFQ." />
         <StatCard label="Replies needing review" value={report.needsReplyReview} hint="Reviewing and negotiation RFQs." />
-        <StatCard label="New RFQs" value={report.statusCount("NEW")} hint="Opened and not yet reviewed." />
-        <StatCard label="Ready for approval" value={report.statusCount("READY_TO_QUOTE")} hint="Quoted, not sent automatically." />
-        <StatCard label="Quotes sent" value={report.statusCount("QUOTE_SENT")} hint="Sent in the customer thread." />
+        <StatCard label="New RFQs" value={report.statusCount("NEW") + report.statusCount("RECEIVED") + report.statusCount("PARSED")} hint="Opened and not yet matched." />
+        <StatCard label="Ready for approval" value={report.statusCount("READY_TO_QUOTE") + report.statusCount("QUOTE_READY")} hint="Quoted, not sent automatically." />
+        <StatCard label="Quotes sent" value={report.statusCount("QUOTE_SENT") + report.statusCount("SENT")} hint="Sent in the customer thread." />
         <StatCard label="Won" value={report.statusCount("WON")} hint="Accepted quotation or purchase order." />
         <StatCard label="Lost" value={report.statusCount("LOST")} hint="Customer is not interested." />
         <StatCard label="Negotiation" value={report.statusCount("NEGOTIATION")} hint="Price, substitute, or delivery changes wait for approval." />

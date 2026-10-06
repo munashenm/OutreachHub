@@ -146,6 +146,7 @@ export function decideSalesResponse(input: {
   matches: RankedProduct[];
   marginAllowed: boolean;
   autoSendAllowed: boolean;
+  equivalentsRejected?: boolean;
 }): SalesDecision {
   if (input.vague || input.matches.length === 0) {
     const nothing = input.matches.length === 0 && !input.vague;
@@ -161,6 +162,15 @@ export function decideSalesResponse(input: {
   const exactRows = input.matches.filter((match) => match.method === "EXACT");
   if (input.requestedExact) {
     if (exactRows.length === 0) {
+      const substitutes = priced.filter((match) => (match.stockQty ?? 0) >= quantity);
+      if (!input.equivalentsRejected && substitutes.length > 0 && input.marginAllowed) {
+        return {
+          action: "ALTERNATIVES",
+          confidence: confidenceFor(substitutes[0], quantity),
+          matches: substitutes.slice(0, 3),
+          message: composeSalesReply({ action: "ALTERNATIVES", customerName: "", lines: replyLines(substitutes.slice(0, 3), quantity), validUntil: "" }),
+        };
+      }
       return { action: "EXTERNAL_TASK", confidence: 0, matches: [], message: EXTERNAL_SOURCING_NOTE };
     }
     const exactInStock = exactRows.find((match) => (match.unitPriceCents ?? 0) > 0 && (match.stockQty ?? 0) >= quantity);
@@ -253,11 +263,11 @@ export function quoteFollowUpAction(input: {
 }
 
 export function funnelStage(status: string): FunnelStage {
-  if (status === "WON") return "ACCEPTED";
+  if (status === "WON" || status === "ACCEPTED") return "ACCEPTED";
   if (status === "LOST") return "LOST";
   if (status === "NEGOTIATION") return "REVISED";
-  if (status === "QUOTE_SENT") return "QUOTED";
-  if (status === "NEW") return "ENQUIRY";
+  if (status === "QUOTE_SENT" || status === "SENT") return "QUOTED";
+  if (status === "NEW" || status === "RECEIVED") return "ENQUIRY";
   return "RFQ";
 }
 

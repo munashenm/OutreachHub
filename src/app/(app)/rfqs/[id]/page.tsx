@@ -65,6 +65,11 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
         <p><span className="text-muted">Company: </span>{rfq.company ? <Link className="hover:underline" href={`/companies/${rfq.company.id}`}>{rfq.company.companyName}</Link> : "—"}</p>
         <p className="md:col-span-2"><span className="text-muted">Original enquiry: </span><Link className="hover:underline" href={`/inbox/${rfq.sourceMessageId}`}>{rfq.sourceMessage.subject}</Link></p>
         {rfq.automationNote ? <p className="md:col-span-2"><span className="text-muted">Automation: </span>{rfq.automationNote}</p> : null}
+        <p><span className="text-muted">State: </span>{rfq.status}</p>
+        <p><span className="text-muted">Thread: </span>{rfq.threadId || rfq.sourceMessage.threadId || "—"}</p>
+        {rfq.strictness ? <p><span className="text-muted">Strictness: </span>{rfq.strictness}</p> : null}
+        {rfq.quoteBlockedReason ? <p className="md:col-span-2"><span className="text-muted">Blocked: </span>{rfq.quoteBlockedReason}</p> : null}
+        {rfq.lastError ? <p className="md:col-span-2"><span className="text-muted">Last error: </span>{rfq.lastError}</p> : null}
       </Panel>
       <Panel className="p-5" id="sourcing">
           <h2 className="font-semibold">Sourcing</h2>

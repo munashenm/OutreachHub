@@ -1,4 +1,5 @@
 import { priceQuotation } from "./automation";
+import { equivalentsRejected, isRecommendationRequest, quoteOptionCount, requestStrictness } from "./rfq-match";
 import { supplierClassRank, type SupplierClass } from "./supplier-scorecard";
 
 export const CLARIFICATION_REPLY = "Thank you for your request. To prepare an accurate quotation, could you please confirm the required processor, RAM, storage configuration and operating system?";
@@ -64,6 +65,7 @@ export type SourcingCandidate = {
   checkedAt: string | null;
   reputable: boolean;
   supplierClass?: SupplierClass;
+  leadTimeDays?: number | null;
 };
 
 export type SourcingPools = {
@@ -179,6 +181,7 @@ export function requirementSummary(requirement: ProductRequirement) {
 }
 
 export function requirementIsVague(requirement: ProductRequirement) {
+  if (isRecommendationRequest(requirement.requestedText) && (requirement.productType || /\blaptops?|notebooks?|servers?|switches?\b/i.test(requirement.requestedText))) return false;
   if (requirement.sku || requirement.mpn || requirement.model) return false;
   const specified = [requirement.processor, requirement.ramGb, requirement.storageGb, requirement.operatingSystem, requirement.screenInches, requirement.graphics].filter((value) => value != null && value !== "").length;
   return specified < 2;
@@ -186,6 +189,7 @@ export function requirementIsVague(requirement: ProductRequirement) {
 
 export function requirementAwaitingQuantity(requirement: ProductRequirement | undefined) {
   if (!requirement || requirement.quantity != null || requirement.sku || requirement.mpn || requirement.model) return false;
+  if (isRecommendationRequest(requirement.requestedText)) return false;
   return !requirementIsVague(requirement);
 }
 
@@ -259,8 +263,7 @@ export function planSourcing(input: {
     return { kind: "SOURCING", message: SOURCING_REPLY, note: "The request did not state a quantity and a product or specification, so sourcing is still open." };
   }
   if (input.requirements.some(requirementIsVague)) {
-    const attached = input.requirements.some((requirement) => /\battach(?:ed|ment)\b/i.test(requirement.requestedText));
-    return { kind: "CLARIFICATION", message: attached ? ATTACHMENT_CLARIFICATION : CLARIFICATION_REPLY };
+    return { kind: "CLARIFICATION", message: CLARIFICATION_REPLY };
   }
   const priced: PricedSource[] = [];
   for (const requirement of input.requirements) {
@@ -271,62 +274,245 @@ export function planSourcing(input: {
     }
     priced.push(...found.options);
   }
-  const send = priced.length === 1 && Boolean(priced[0]?.canSend);
+  const catalogueBacked = priced.every((option) => option.sourceKind !== "EXTERNAL_SOURCE");
+  const send = priced.length > 0 && priced.every((option) => option.canSend) && catalogueBacked;
   return {
     kind: "QUOTE",
     send,
-    note: send ? "The sourced product met the specification and the quotation can be sent." : "A sourced quotation is ready for approval.",
+    note: send ? "A catalogue or supplier product meets the request, so the quotation can be sent." : "A sourced quotation is ready for approval.",
     options: priced.slice(0, 3),
   };
 }
 
 function chooseSources(requirement: ProductRequirement, pools: SourcingPools, now: Date, freshnessMs: number, margins: { minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }) {
+  const internal = [...pools.catalogue, ...pools.supplierFeeds, ...pools.supplierApis];
+  const found = selectSources(requirement, internal, now, freshnessMs, margins);
+  if (found.options.length > 0 || found.blocked) return found;
+  return selectSources(requirement, pools.external, now, freshnessMs, margins);
+}
+
+function selectSources(requirement: ProductRequirement, candidates: SourcingCandidate[], now: Date, freshnessMs: number, margins: { minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }) {
   const quantity = Math.max(1, requirement.quantity ?? 1);
-  const ranked = SOURCE_ORDER.flatMap((sourceKind) => poolFor(pools, sourceKind).map((candidate) => ({ candidate, sourceKind })))
-    .filter(({ candidate }) => candidate.supplierClass !== "REJECT" && usableCandidate(candidate, now, freshnessMs))
-    .map(({ candidate }) => ({ candidate, grade: compareRequirement(requirement, candidate) }))
-    .filter((item) => item.grade === "EXACT" || item.grade === "MEETS_REQUIREMENT" || item.grade === "EXCEEDS_REQUIREMENT")
-    .filter((item) => item.candidate.stockKnown && item.candidate.stockQty != null && item.candidate.stockQty >= quantity && item.candidate.fresh);
-  ranked.sort((left, right) => {
-    const source = SOURCE_ORDER.indexOf(left.candidate.sourceKind) - SOURCE_ORDER.indexOf(right.candidate.sourceKind);
-    if (source !== 0) return source;
-    const grade = GRADE_ORDER.indexOf(left.grade) - GRADE_ORDER.indexOf(right.grade);
-    if (grade !== 0) return grade;
-    const rank = supplierClassRank(left.candidate.supplierClass) - supplierClassRank(right.candidate.supplierClass);
-    if (rank !== 0) return rank;
-    return (left.candidate.costExVatCents ?? left.candidate.listedPriceCents ?? 0) - (right.candidate.costExVatCents ?? right.candidate.listedPriceCents ?? 0);
-  });
-  const seen = new Set<string>();
-  const unique = ranked.filter((item) => {
-    const key = `${item.candidate.sourceKind}|${item.candidate.sku}|${item.candidate.name}`.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const text = requirement.requestedText;
+  const strictness = requestStrictness(text, Boolean(requirement.sku || requirement.mpn || requirement.model));
+  const rejected = strictness === "EXACT" || equivalentsRejected(text);
+  const recommendation = strictness === "RECOMMENDATION";
+  const optionCount = quoteOptionCount(text);
+  const usable = candidates.filter((candidate) => candidate.supplierClass !== "REJECT" && usableCandidate(candidate, now, freshnessMs) && candidate.stockKnown && candidate.stockQty != null && candidate.stockQty >= quantity && candidate.fresh && canPrice(candidate));
+  const chosen = recommendation && optionCount >= 2
+    ? priceLevels(usable.filter((candidate) => recommendationEligible(requirement, candidate)), optionCount)
+    : firstStage(requirement, usable, rejected, recommendation);
+  return priceSelection(requirement, chosen, quantity, margins, optionCount);
+}
+
+function firstStage(requirement: ProductRequirement, candidates: SourcingCandidate[], rejected: boolean, recommendation: boolean) {
+  const stages: Array<{ limit: number; match: (candidate: SourcingCandidate) => boolean }> = [];
+  if (requirement.sku || requirement.mpn) stages.push({ limit: 1, match: (candidate) => identitySku(requirement, candidate) });
+  if (requirement.model && !recommendation) stages.push({ limit: 1, match: (candidate) => exactModel(requirement, candidate) });
+  if (!rejected && requirement.model) stages.push({ limit: 1, match: (candidate) => fuzzyModel(requirement, candidate) });
+  const identityRequested = Boolean(requirement.sku || requirement.mpn || requirement.model);
+  if (!(rejected && identityRequested)) stages.push({ limit: 1, match: (candidate) => specificationMatch(requirement, candidate) });
+  if (!rejected) stages.push({ limit: 1, match: (candidate) => suitableAlternative(requirement, candidate) });
+  for (const stage of stages) {
+    const found = candidates.filter(stage.match);
+    if (found.length === 0) continue;
+    return sortCandidates(requirement, found).slice(0, stage.limit);
+  }
+  return [];
+}
+
+function priceSelection(requirement: ProductRequirement, candidates: SourcingCandidate[], quantity: number, margins: { minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }, optionCount: number) {
   const options: PricedSource[] = [];
   let blocked = "";
-  for (const item of unique) {
-    if (options.length >= 3) break;
-    const priced = priceCandidate(requirement, item.candidate, item.grade, quantity, margins);
+  for (const candidate of candidates) {
+    const grade = quoteGrade(requirement, candidate);
+    const priced = priceCandidate(requirement, candidate, grade, optionCount >= 2 ? Math.max(1, requirement.quantity ?? 1) : quantity, margins);
     if (!priced) continue;
     if (priced.marginBelowMinimum) {
       blocked = "The margin is below the minimum, so the quotation was not created.";
       continue;
     }
     options.push(priced.option);
-    if (requirement.model || requirement.sku) break;
   }
   if (options.length > 1) {
     options.forEach((option, index) => {
-      if (index === 0 && option.role !== "Upgrade") option.role = "Recommended";
-      if (index > 0 && option.role === "Recommended") option.role = "Alternative";
+      option.role = index === 0 ? "Recommended" : "Alternative";
     });
   }
   if (options.length === 0 && blocked) return { options: [], blocked };
   return { options, blocked: "" };
 }
 
+function sortCandidates(requirement: ProductRequirement, candidates: SourcingCandidate[]) {
+  const gradeFor = (candidate: SourcingCandidate) => quoteGrade(requirement, candidate);
+  return [...candidates].sort((left, right) => {
+    const source = SOURCE_ORDER.indexOf(left.sourceKind) - SOURCE_ORDER.indexOf(right.sourceKind);
+    if (source !== 0) return source;
+    const grade = GRADE_ORDER.indexOf(gradeFor(left)) - GRADE_ORDER.indexOf(gradeFor(right));
+    if (grade !== 0) return grade;
+    const points = candidateScore(requirement, right) - candidateScore(requirement, left);
+    if (points !== 0) return points;
+    const rank = supplierClassRank(left.supplierClass) - supplierClassRank(right.supplierClass);
+    if (rank !== 0) return rank;
+    const price = priceOf(left) - priceOf(right);
+    if (price !== 0) return price;
+    return (left.leadTimeDays ?? 999) - (right.leadTimeDays ?? 999);
+  });
+}
+
+function priceLevels(candidates: SourcingCandidate[], count: number) {
+  const priced = candidates.map((candidate) => ({ candidate, price: priceOf(candidate) })).filter((item) => item.price > 0).sort((left, right) => left.price - right.price);
+  if (priced.length === 0) return [];
+  if (count < 2 || priced.length === 1) return [priced[0].candidate];
+  const cheap = priced[0];
+  const dear = [...priced].reverse().find((item) => item.price > cheap.price);
+  return dear ? [cheap.candidate, dear.candidate] : [cheap.candidate];
+}
+
+export function candidateScore(requirement: ProductRequirement, candidate: SourcingCandidate) {
+  const offered = specsFromText(`${candidate.name} ${candidate.model} ${candidate.specifications}`);
+  let points = 0;
+  const award = (result: string, meet: number, exceed: number) => {
+    if (result === "MEETS") points += meet;
+    if (result === "EXCEEDS") points += exceed;
+  };
+  award(compareProcessor(requirement.processor, offered.processor), 20, 14);
+  award(compareNumber(requirement.ramGb, offered.ramGb), 15, 12);
+  award(compareStorage(requirement, offered), 15, 12);
+  award(compareScreen(requirement.screenInches, offered.screenInches), 8, 6);
+  award(compareOs(requirement.operatingSystem, offered.operatingSystem), 20, 0);
+  if (requirement.warranty && `${candidate.name} ${candidate.specifications}`.toLowerCase().includes(requirement.warranty.toLowerCase())) points += 8;
+  if (candidate.stockKnown && candidate.stockQty != null && candidate.stockQty >= Math.max(1, requirement.quantity ?? 1)) points += 10;
+  if (candidate.leadTimeDays != null && candidate.leadTimeDays >= 0) points += Math.max(0, 10 - Math.min(10, candidate.leadTimeDays));
+  return points;
+}
+
+export function requirementsFromSources(body: string, attachment: string): ProductRequirement[] {
+  const fromBody = extractProductRequirements(body);
+  const supplement = attachment.trim() ? requirementFromText(attachment) : emptyRequirement();
+  const supplementUseful = meaningfulRequirement(supplement);
+  if (fromBody.length === 0) {
+    const fromAttachment = extractProductRequirements(attachment);
+    if (fromAttachment.length > 0) return fromAttachment;
+    return supplementUseful ? [supplement] : [];
+  }
+  if (!supplementUseful) return fromBody;
+  return fromBody.map((requirement) => fillRequirement(requirement, supplement));
+}
+
+function meaningfulRequirement(requirement: ProductRequirement) {
+  return requirementIsUseful(requirement) || hasComparableSpecs(requirement);
+}
+
+function fillRequirement(primary: ProductRequirement, extra: ProductRequirement): ProductRequirement {
+  const filled = { ...primary };
+  const keys = ["productType", "brandPreference", "processor", "processorGeneration", "storageType", "operatingSystem", "graphics", "ports", "networking", "warranty", "formFactor", "colour", "requiredCertifications", "sku", "mpn", "model"] as const;
+  for (const key of keys) if (!filled[key] && extra[key]) filled[key] = extra[key];
+  if (filled.quantity == null && extra.quantity != null) filled.quantity = extra.quantity;
+  if (filled.ramGb == null && extra.ramGb != null) filled.ramGb = extra.ramGb;
+  if (filled.storageGb == null && extra.storageGb != null) filled.storageGb = extra.storageGb;
+  if (filled.screenInches == null && extra.screenInches != null) filled.screenInches = extra.screenInches;
+  if (extra.requestedText.trim()) filled.requestedText = `${primary.requestedText}\n${extra.requestedText}`.slice(0, 800);
+  return filled;
+}
+
+function canPrice(candidate: SourcingCandidate) {
+  if ((candidate.costExVatCents ?? 0) > 0) return true;
+  return (candidate.listedPriceCents ?? 0) > 0 && (candidate.sourceKind === "URBAN_FOCUS_CATALOGUE" || candidate.sourceKind === "EXTERNAL_SOURCE");
+}
+
+function priceOf(candidate: SourcingCandidate) {
+  if (candidate.sourceKind === "URBAN_FOCUS_CATALOGUE" && (candidate.listedPriceCents ?? 0) > 0) return candidate.listedPriceCents ?? 0;
+  return candidate.costExVatCents ?? candidate.listedPriceCents ?? 0;
+}
+
+function identitySku(requirement: ProductRequirement, candidate: SourcingCandidate) {
+  const offered = [candidate.sku, candidate.mpn].map((value) => value.toLowerCase());
+  const sku = requirement.sku.toLowerCase();
+  const mpn = requirement.mpn.toLowerCase();
+  return Boolean((sku && offered.includes(sku)) || (mpn && offered.includes(mpn)));
+}
+
+function exactModel(requirement: ProductRequirement, candidate: SourcingCandidate) {
+  const wanted = requirement.model.toLowerCase().replace(/\s+/g, " ").trim();
+  if (wanted.length < 4) return false;
+  return `${candidate.name} ${candidate.model}`.toLowerCase().includes(wanted);
+}
+
+function fuzzyModel(requirement: ProductRequirement, candidate: SourcingCandidate) {
+  const generic = new Set(["thinkpad", "laptop", "lenovo", "notebook", "probook", "elitebook", "dell", "asus", "hp"]);
+  const tokens = requirement.model.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 2 && !generic.has(token));
+  if (tokens.length === 0) return false;
+  const hay = `${candidate.name} ${candidate.model} ${candidate.sku}`.toLowerCase();
+  return tokens.every((token) => hay.includes(token));
+}
+
+function specificationMatch(requirement: ProductRequirement, candidate: SourcingCandidate) {
+  if (!hasComparableSpecs(requirement)) return false;
+  const grade = compareRequirement(requirement, candidate);
+  return grade === "EXACT" || grade === "MEETS_REQUIREMENT" || grade === "EXCEEDS_REQUIREMENT";
+}
+
+function suitableAlternative(requirement: ProductRequirement, candidate: SourcingCandidate) {
+  if (isRecommendationRequest(requirement.requestedText)) return recommendationEligible(requirement, candidate);
+  if (!(requirement.model || requirement.sku || requirement.mpn)) return false;
+  return specificationMatch(requirement, candidate);
+}
+
+function recommendationEligible(requirement: ProductRequirement, candidate: SourcingCandidate) {
+  const blob = `${candidate.name} ${candidate.brand} ${candidate.model} ${candidate.specifications}`;
+  const wantsLaptop = requirement.productType === "Laptop" || /\blaptops?|notebooks?\b/i.test(requirement.requestedText);
+  if (wantsLaptop && !/\blaptops?|notebooks?|thinkpad|probook|elitebook|latitude\b/i.test(blob)) return false;
+  if (/\b(professional|programming|business)\b/i.test(requirement.requestedText) && !/\b(thinkpad|probook|elitebook|latitude|expertbook|precision|zbook)\b/i.test(blob)) return false;
+  const probe = { ...requirement, model: "", sku: "", mpn: "" };
+  if (hasComparableSpecs(probe)) {
+    const grade = compareRequirement(probe, candidate);
+    return grade === "EXACT" || grade === "MEETS_REQUIREMENT" || grade === "EXCEEDS_REQUIREMENT";
+  }
+  return wantsLaptop || Boolean(requirement.productType);
+}
+
+function quoteGrade(requirement: ProductRequirement, candidate: SourcingCandidate): MatchGrade {
+  if (identitySku(requirement, candidate) || exactModel(requirement, candidate)) {
+    const grade = compareRequirement(requirement, candidate);
+    return grade === "DOES_NOT_MEET" || grade === "PARTIAL" ? "EXACT" : grade;
+  }
+  const probe = { ...requirement, model: "", sku: "", mpn: "" };
+  if (hasComparableSpecs(probe)) {
+    const grade = compareRequirement(probe, candidate);
+    if (grade === "EXACT" || grade === "MEETS_REQUIREMENT" || grade === "EXCEEDS_REQUIREMENT") return grade;
+  }
+  return "MEETS_REQUIREMENT";
+}
+
 function priceCandidate(requirement: ProductRequirement, candidate: SourcingCandidate, grade: MatchGrade, quantity: number, margins: { minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }) {
+  const published = candidate.sourceKind === "URBAN_FOCUS_CATALOGUE" && (candidate.listedPriceCents ?? 0) > 0 ? candidate.listedPriceCents : null;
+  if (published) {
+    if ((candidate.costExVatCents ?? 0) > 0) {
+      const margin = ((published - (candidate.costExVatCents ?? 0)) / published) * 100;
+      if (margin < margins.minimumMarginPercent) return { marginBelowMinimum: true as const, option: null };
+    }
+    return {
+      marginBelowMinimum: false as const,
+      option: {
+        role: grade === "EXCEEDS_REQUIREMENT" ? "Upgrade" as const : "Recommended" as const,
+        name: candidate.name,
+        specifications: candidate.specifications,
+        quantity,
+        unitPriceCents: published,
+        sourceKind: candidate.sourceKind,
+        sourceName: candidate.sourceName,
+        sourceUrl: candidate.sourceUrl,
+        checkedAt: candidate.checkedAt,
+        match: grade,
+        confidence: "HIGH" as const,
+        costStatus: "VERIFIED" as const,
+        canSend: true,
+        stockQty: candidate.stockQty,
+        productId: candidate.productId,
+      },
+    };
+  }
   const external = candidate.sourceKind === "EXTERNAL_SOURCE";
   const listed = candidate.listedPriceCents;
   const exclusive = external ? exclusiveFromListed(listed ?? 0, candidate.vatIncluded) : candidate.costExVatCents;
@@ -397,15 +583,9 @@ function usableCandidate(candidate: SourcingCandidate, now: Date, freshnessMs: n
   return isSourcingFresh(new Date(candidate.checkedAt), now, freshnessMs);
 }
 
-function poolFor(pools: SourcingPools, sourceKind: SourceKind) {
-  if (sourceKind === "URBAN_FOCUS_CATALOGUE") return pools.catalogue;
-  if (sourceKind === "SUPPLIER_FEED") return pools.supplierFeeds;
-  if (sourceKind === "SUPPLIER_API") return pools.supplierApis;
-  return pools.external;
-}
-
 function isRequestLine(line: string) {
-  return /\b(?:quote|need|pricing|rfq)\b/i.test(line) && hasQuantity(line) || /^\s*\d+\s*[x×]\b/i.test(line);
+  if (/\b(recommend(?:ation)?s?|suitable options?|or equivalent)\b/i.test(line)) return true;
+  return (/\b(?:quote|need|pricing|rfq)\b/i.test(line) && hasQuantity(line)) || /^\s*\d+\s*[x×]\b/i.test(line);
 }
 
 function hasQuantity(line: string) {
@@ -431,10 +611,10 @@ function requirementFromText(text: string): ProductRequirement {
   if (/\blaptops?|notebooks?\b/i.test(text)) requirement.productType = "Laptop";
   else if (/\bservers?\b/i.test(text)) requirement.productType = "Server";
   else if (/\bswitches?\b/i.test(text)) requirement.productType = "Switch";
-  const model = text.match(/\bthinkpad\s+[a-z]?\d{2}[a-z0-9]*(?:\s+gen\s*\d+)?\b/i)?.[0] ?? "";
+  const model = text.match(/\b((?:thinkpad|latitude|alienware|probook|elitebook|precision|inspiron|xps)\s+[a-z]?\d{2,4}[a-z0-9]*)\b/i)?.[0] ?? "";
   requirement.model = model;
   const labelled = text.match(/\b(?:sku|mpn|part(?:\s*number)?)\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{2,})\b/i)?.[1] ?? "";
-  const afterQuantity = text.match(/\b[x×]\s+([A-Z0-9][A-Z0-9-]{2,})/i)?.[1] ?? "";
+  const afterQuantity = text.match(/(?:^|\s)[x×]\s+([A-Z0-9][A-Z0-9-]{2,})/i)?.[1] ?? "";
   const sku = labelled || (/\d/.test(afterQuantity) ? afterQuantity : "");
   if (sku && !/thinkpad/i.test(sku)) requirement.sku = sku.toUpperCase();
   requirement.quantity = quantityFrom(text);
@@ -475,9 +655,6 @@ type ParsedSpecs = {
 };
 
 function specsFromText(text: string): ParsedSpecs {
-  const ultra = text.match(/\bcore\s+ultra\s+([3579])\b/i);
-  const core = text.match(/\bcore\s+i([3579])\b/i);
-  const ryzen = text.match(/\bryzen\s+([3579])\b/i);
   const ram = text.match(/\b(\d+)\s*gb(?:\s+ddr\d+)?\s*(?:ram|memory)\b/i) ?? text.match(/\b(?:memory|ram)\s*[:\-]?\s*(\d+)\s*gb\b/i);
   const disk = text.match(/\b(\d+)\s*(gb|tb)(?:\s+pcie)?\s*(ssd|nvme|hdd)\b/i) ?? text.match(/\bstorage\s*[:\-]?\s*(\d+)\s*(gb|tb)\b/i);
   const screen = text.match(/\b(\d+(?:\.\d+)?)\s*(?:-| )?\s*(?:inch|inches|")/i);
@@ -491,10 +668,16 @@ function specsFromText(text: string): ParsedSpecs {
     if (ramGb == null && memory != null && drive != null) ramGb = memory;
     if (storageGb == null && drive != null) storageGb = drive;
   }
+  if (ramGb == null) {
+    const amounts = [...text.matchAll(/\b(\d+)\s*gb\b/gi)].map((match) => Number(match[1]));
+    const small = amounts.filter((amount) => amount >= 4 && amount <= 64);
+    const large = amounts.filter((amount) => amount >= 128);
+    if (small.length === 1 && large.length === 0) ramGb = small[0];
+  }
   const modelInches = thinkpadScreen ? Number(thinkpadScreen[1]) : null;
   const screenInches = screen ? Number(screen[1]) : modelInches === 13 || modelInches === 14 || modelInches === 15 || modelInches === 16 ? modelInches : null;
   return {
-    processor: ultra ? `Core Ultra ${ultra[1]}` : core ? `Core i${core[1]}` : ryzen ? `Ryzen ${ryzen[1]}` : "",
+    processor: parseProcessor(text),
     ramGb,
     storageGb,
     storageType: disk?.[3] ? (disk[3].toLowerCase() === "hdd" ? "HDD" : "SSD") : "",
@@ -522,7 +705,32 @@ function identityMatches(requirement: ProductRequirement, candidate: SourcingCan
   return offered.includes(wanted);
 }
 
+function parseProcessor(text: string) {
+  const classes: string[] = [];
+  const add = (label: string) => {
+    if (!classes.includes(label)) classes.push(label);
+  };
+  for (const match of text.matchAll(/\bcore\s+i([3579])\b/gi)) add(`Core i${match[1]}`);
+  for (const match of text.matchAll(/\bultra\s+([3579])\b/gi)) add(`Core Ultra ${match[1]}`);
+  for (const match of text.matchAll(/\bcore\s+([3579])\b/gi)) add(`Core Ultra ${match[1]}`);
+  for (const match of text.matchAll(/\bryzen\s+([3579])\b/gi)) add(`Ryzen ${match[1]}`);
+  return classes.join("|");
+}
+
 function compareProcessor(required: string, offered: string): "MEETS" | "EXCEEDS" | "MISS" | "FAIL" | "SKIP" {
+  if (!required) return "SKIP";
+  const options = required.split("|").map((part) => part.trim()).filter(Boolean);
+  if (options.length === 0) return "SKIP";
+  const rank = { EXCEEDS: 3, MEETS: 2, MISS: 1, FAIL: 0, SKIP: 0 };
+  let best: "MEETS" | "EXCEEDS" | "MISS" | "FAIL" | "SKIP" = "FAIL";
+  for (const option of options) {
+    const result = compareOneProcessor(option, offered);
+    if (rank[result] > rank[best]) best = result;
+  }
+  return best;
+}
+
+function compareOneProcessor(required: string, offered: string): "MEETS" | "EXCEEDS" | "MISS" | "FAIL" | "SKIP" {
   if (!required) return "SKIP";
   if (!offered) return "MISS";
   const requiredUltra = /ultra/.test(required.toLowerCase());

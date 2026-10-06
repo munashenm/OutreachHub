@@ -12,6 +12,7 @@ import {
   salesFunnelMetrics,
   type RankedProduct,
 } from "../lib/sales-response";
+import { equivalentsRejected } from "../lib/rfq-match";
 import type { ProductRequirement, SourcingCandidate } from "../lib/sourcing";
 import { formatQuoteDate, lineTotalCents } from "../lib/quote";
 import { quotationEmailSubject, urbanFocusQuoteNumber } from "../lib/quotation-document";
@@ -57,6 +58,7 @@ export function responseForRequirement(requirement: ProductRequirement, candidat
     matches,
     marginAllowed,
     autoSendAllowed,
+    equivalentsRejected: equivalentsRejected(requirement.requestedText),
   });
 }
 

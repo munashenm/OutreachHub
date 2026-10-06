@@ -1,5 +1,5 @@
 import { Prisma } from "../generated/prisma/client";
-import { getDb } from "../lib/db";
+import { getDb, isUniqueViolation } from "../lib/db";
 import { AppError } from "../lib/errors";
 import { parseMoneyToCents, parseQuantity, quoteValidUntil, snapshotQuoteLine } from "../lib/quote";
 import { quoteMarginBlock, sellMarginPercent } from "../lib/stock";
@@ -116,6 +116,10 @@ export async function getQuoteDocument(workspaceId: string, id: string) {
 export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays: number; notes: string; documentMode?: "STANDARD" | "FORMAL"; exportQuote?: boolean; references?: string }) {
   const rfq = await getRfq(actor.workspaceId, rfqId);
   if (!rfq) throw new AppError("RFQ not found.", 404, "NOT_FOUND");
+  const alreadySent = await getDb().quote.findFirst({ where: { workspaceId: actor.workspaceId, rfqId: rfq.id, status: "SENT" }, select: { id: true } });
+  if (alreadySent) return;
+  const sendLock = await getDb().rfqOutboundKey.findFirst({ where: { rfqId: rfq.id, key: { startsWith: "QUOTE_SEND:" } }, select: { id: true } });
+  if (sendLock) return;
   if (await responseModeForRfq(rfq.id) === "TENDER_PACKAGE") throw new AppError("This tender requires the official submission method. An email quotation was not sent.");
   const quote = await getDb().quote.findFirst({
     where: { workspaceId: actor.workspaceId, rfqId: rfq.id, status: "DRAFT" },
@@ -185,17 +189,33 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
     quoteNumber: urbanFocusQuoteNumber(quoteNumber, quoteIssuedAt),
     validUntil: prepared.validUntil,
   });
-  await sendCustomerResponse(actor, {
-    messageId: rfq.sourceMessageId,
-    to,
-    cc: "",
-    subject: quotationEmailSubject(quoteNumber, quoteIssuedAt),
-    body,
-    attachments: [{ filename: pdf.filename, contentType: "application/pdf", data: pdf.bytes }],
-  });
+  const sendKey = `QUOTE_SEND:${quote.id}:1`;
+  const existingSend = await getDb().rfqOutboundKey.findUnique({ where: { key: sendKey } });
+  if (existingSend) return;
+  try {
+    await getDb().rfqOutboundKey.create({ data: { key: sendKey, rfqId: rfq.id } });
+  } catch (error) {
+    if (isUniqueViolation(error)) return;
+    throw error;
+  }
+  await getDb().rfq.update({ where: { id: rfq.id }, data: { status: "SENDING" } });
+  try {
+    await sendCustomerResponse(actor, {
+      messageId: rfq.sourceMessageId,
+      to,
+      cc: "",
+      subject: quotationEmailSubject(quoteNumber, quoteIssuedAt),
+      body,
+      attachments: [{ filename: pdf.filename, contentType: "application/pdf", data: pdf.bytes }],
+    });
+  } catch (error) {
+    await getDb().rfqOutboundKey.deleteMany({ where: { key: sendKey } });
+    await getDb().rfq.update({ where: { id: rfq.id }, data: { status: "QUOTE_READY", lastError: "The quotation email could not be sent. It can be retried." } });
+    throw error;
+  }
   await getDb().$transaction(async (tx) => {
     await tx.quote.update({ where: { id: prepared.id }, data: { status: "SENT", sentAt: new Date() } });
-    await tx.rfq.update({ where: { id: rfq.id }, data: { status: "QUOTE_SENT" } });
+    await tx.rfq.update({ where: { id: rfq.id }, data: { status: "SENT" } });
     await recordActivity(tx, {
       workspaceId: actor.workspaceId,
       actorId: actor.userId === "system" ? null : actor.userId,

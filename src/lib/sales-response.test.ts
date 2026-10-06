@@ -100,10 +100,21 @@ test("offers a verified alternative only after the requested product is out of s
     requestedQuantity: 2,
     marginAllowed: true,
     autoSendAllowed: false,
+    equivalentsRejected: true,
     matches: [alternative],
   });
   assert.equal(beforeStock.action, "EXTERNAL_TASK");
   assert.equal(beforeStock.message.includes("E16"), false);
+  const allowed = decideSalesResponse({
+    vague: false,
+    requestedExact: true,
+    requestedQuantity: 2,
+    marginAllowed: true,
+    autoSendAllowed: false,
+    matches: [alternative],
+  });
+  assert.equal(allowed.action, "ALTERNATIVES");
+  assert.match(allowed.message, /E16/);
   const decision = decideSalesResponse({
     vague: false,
     requestedExact: true,

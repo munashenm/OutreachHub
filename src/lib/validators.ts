@@ -326,7 +326,7 @@ export const replySchema = z.object({
 
 export const rfqUpdateSchema = z.object({
   id: z.string().trim().min(1),
-  status: z.enum(["NEW", "SOURCING", "REVIEWING", "NEEDS_INFORMATION", "READY_TO_QUOTE", "QUOTE_PREPARED", "QUOTE_SENT", "NEGOTIATION", "WON", "LOST"]),
+  status: z.enum(["NEW", "RECEIVED", "PARSED", "PARSING", "MATCHING", "MATCHED", "PRICED", "QUOTE_READY", "SENDING", "SENT", "NEEDS_CLARIFICATION", "ACCEPTED", "FAILED", "CANCELLED", "SOURCING", "REVIEWING", "NEEDS_INFORMATION", "READY_TO_QUOTE", "QUOTE_PREPARED", "QUOTE_SENT", "NEGOTIATION", "WON", "LOST"]),
   notes: z.string().trim().max(10000).optional().default(""),
 });
 
