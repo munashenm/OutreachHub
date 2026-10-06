@@ -107,6 +107,19 @@ enum InboxCategory {
 
 enum RfqStatus {
   NEW
+  RECEIVED
+  PARSED
+  MATCHED
+  PRICED
+  QUOTE_READY
+  SENT
+  NEEDS_CLARIFICATION
+  PARSING
+  MATCHING
+  SENDING
+  ACCEPTED
+  FAILED
+  CANCELLED
   SOURCING
   REVIEWING
   NEEDS_INFORMATION
@@ -458,6 +471,7 @@ model Rfq {
   prospectId      String?
   companyId       String?
   sourceMessageId String
+  threadId        String    @default("")
   subject         String
   description     String    @default("")
   notes           String    @default("")
@@ -466,6 +480,12 @@ model Rfq {
   requiredDate      String @default("")
   acknowledgementSentAt DateTime?
   automationNote    String @default("")
+  lastError         String @default("")
+  requirementsHash  String @default("")
+  quoteBlockedReason String @default("")
+  strictness        String @default("")
+  lastMatchedAt     DateTime?
+  lastPricedAt      DateTime?
   enquiryJson       Json?
   lostReason        String    @default("")
   respondedAt       DateTime?
@@ -482,10 +502,39 @@ model Rfq {
   funnelEvents  SalesFunnelEvent[]
   sourcingTasks SourcingTask[]
   analyses      TenderAnalysis[]
+  events        RfqEvent[]
+  outboundKeys  RfqOutboundKey[]
 
   @@index([workspaceId, status])
   @@index([workspaceId, createdAt])
+  @@index([workspaceId, threadId])
   @@index([sourceMessageId])
+}
+
+model RfqEvent {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  rfqId          String
+  type           String
+  status         String   @default("")
+  reason         String   @default("")
+  gmailMessageId String   @default("")
+  createdAt      DateTime @default(now())
+
+  rfq Rfq @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+
+  @@index([rfqId, createdAt])
+}
+
+model RfqOutboundKey {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  rfqId     String
+  createdAt DateTime @default(now())
+
+  rfq Rfq @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+
+  @@index([rfqId])
 }
 
 model RfqLine {

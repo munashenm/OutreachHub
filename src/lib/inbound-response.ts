@@ -26,6 +26,12 @@ export type InitialResponse = {
   message: string;
 };
 
+export function customerResponseAllowed(input: { acknowledgementSent: boolean; decision: string }) {
+  if (input.decision === "QUOTE_READY" || input.decision === "NEEDS_CLARIFICATION") return true;
+  if (input.decision === "NO_RESPONSE") return false;
+  return !input.acknowledgementSent;
+}
+
 const NONE: InitialResponse = { decision: "NO_RESPONSE", autoReplyType: "NONE", message: "" };
 
 export function determineInitialResponse(facts: ResponseFacts): InitialResponse {

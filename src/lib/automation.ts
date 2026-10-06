@@ -98,7 +98,7 @@ function isBulkNotice(subject: string, body: string) {
 export function classifyCustomerReply(text: string): ReplyKind {
   if (/\b(not interested|no longer required|please cancel|decline the quote)\b/i.test(text)) return "NOT_INTERESTED";
   if (/\b(purchase order|\bpo\b|p\.o\.)\b/i.test(text)) return "PURCHASE_ORDER";
-  if (/\b(accept(?:ed)? the quot|we accept|please proceed|go ahead with the quot)\b/i.test(text)) return "QUOTE_ACCEPTED";
+  if (/\b(accept(?:ed)? the quot|we accept|go ahead with the quot)\b/i.test(text)) return "QUOTE_ACCEPTED";
   if (/\b(better price|discount|cheaper|negotiate|too expensive|reduce the price)\b/i.test(text)) return "PRICE_NEGOTIATION";
   if (/\b(alternative|substitute|equivalent|instead of)\b/i.test(text)) return "ALTERNATIVE_REQUEST";
   if (/\b(deliver|delivery|lead time|when can you)\b/i.test(text)) return "DELIVERY_QUESTION";

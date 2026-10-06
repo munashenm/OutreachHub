@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ATTACHMENT_CLARIFICATION,
   CLARIFICATION_REPLY,
   compareRequirement,
   exclusiveFromListed,
@@ -9,6 +8,7 @@ import {
   landedCostCents,
   planSourcing,
   requirementSummary,
+  requirementsFromSources,
   type SourcingCandidate,
   type SourcingPools,
 } from "./sourcing";
@@ -293,7 +293,8 @@ Intel Core Ultra 7 155H
   const plan = planSourcing({ requirements: attached ? [attached] : [], pools: emptyPools(), ...margins, now });
   assert.equal(plan.kind, "CLARIFICATION");
   if (plan.kind !== "CLARIFICATION") return;
-  assert.equal(plan.message, ATTACHMENT_CLARIFICATION);
+  assert.equal(plan.message, CLARIFICATION_REPLY);
+  assert.equal(plan.message.includes("paste"), false);
 });
 
 test("a website ThinkPad title meets the tender specification and is not priced without a supplier cost", () => {
@@ -323,6 +324,290 @@ Intel Core Ultra 7 155H
   const plan = planSourcing({
     requirements: [requirement!],
     pools: { ...emptyPools(), catalogue: [website] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "SOURCING");
+});
+
+function catalogueLaptop(overrides: Partial<SourcingCandidate>) {
+  return candidate({
+    sourceKind: "URBAN_FOCUS_CATALOGUE",
+    sourceType: "INTERNAL",
+    sourceName: "Urban Focus",
+    costExVatCents: null,
+    stockQty: 6,
+    stockKnown: true,
+    fresh: true,
+    ...overrides,
+  });
+}
+
+test("test A quotes an exact catalogue SKU", () => {
+  const [requirement] = extractProductRequirements("Quote 2 × SKU 21QC000YZA.");
+  assert.equal(requirement?.sku, "21QC000YZA");
+  assert.equal(requirement?.quantity, 2);
+  const exact = catalogueLaptop({
+    name: "Lenovo ThinkPad T14 Gen 6",
+    sku: "21QC000YZA",
+    model: "21QC000YZA",
+    productId: "t14",
+    listedPriceCents: 4_085_000,
+    specifications: "Ultra 7, 16GB RAM, 512GB SSD, Windows 11 Pro",
+  });
+  const other = catalogueLaptop({
+    name: "HP ProBook 4 G1iR",
+    sku: "HP-PB",
+    model: "ProBook",
+    productId: "hp",
+    listedPriceCents: 2_280_000,
+    specifications: "Core 5, 16GB RAM, 512GB SSD, Windows 11 Pro",
+  });
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [other, exact] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "QUOTE");
+  if (plan.kind !== "QUOTE") return;
+  assert.equal(plan.send, true);
+  assert.equal(plan.options.length, 1);
+  assert.match(plan.options[0]?.name ?? "", /ThinkPad T14/);
+  assert.equal(plan.options[0]?.quantity, 2);
+  assert.equal(plan.options[0]?.unitPriceCents, 4_085_000);
+});
+
+test("test B quotes a catalogue laptop that meets the specification", () => {
+  const [requirement] = extractProductRequirements("Quote 2 × Core i5/Ultra 5, 16GB, 512GB, Windows 11 Pro laptops.");
+  assert.equal(requirement?.quantity, 2);
+  assert.match(requirement?.processor ?? "", /Core i5/);
+  assert.match(requirement?.processor ?? "", /Core Ultra 5/);
+  assert.equal(requirement?.ramGb, 16);
+  assert.equal(requirement?.storageGb, 512);
+  assert.equal(requirement?.operatingSystem, "Windows 11 Pro");
+  const probook = catalogueLaptop({
+    name: "HP ProBook 4 G1iR Core 5 16GB 512GB Windows 11 Pro",
+    sku: "HP-PB",
+    model: "",
+    productId: "hp",
+    listedPriceCents: 2_280_000,
+    specifications: "HP ProBook 4 G1iR Core 5 16GB 512GB Windows 11 Pro",
+  });
+  const thinkpad = catalogueLaptop({
+    name: "Lenovo ThinkPad T14 Gen 6 Ultra 7 16GB 512GB Windows 11 Pro",
+    sku: "21QC000YZA",
+    model: "21QC000YZA",
+    productId: "t14",
+    listedPriceCents: 4_085_000,
+    specifications: "Lenovo ThinkPad T14 Gen 6 Ultra 7 16GB 512GB Windows 11 Pro",
+  });
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [thinkpad, probook] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "QUOTE");
+  if (plan.kind !== "QUOTE") return;
+  assert.equal(plan.send, true);
+  assert.match(plan.options[0]?.name ?? "", /ProBook/);
+  assert.equal(plan.options[0]?.quantity, 2);
+  assert.equal(plan.options[0]?.unitPriceCents, 2_280_000);
+  assert.equal(plan.options[0]?.sourceKind, "URBAN_FOCUS_CATALOGUE");
+});
+
+test("test C quotes two professional laptops at different prices", () => {
+  const [requirement] = extractProductRequirements("Recommend two professional laptops for programming at different price levels.");
+  assert.equal(requirement?.productType, "Laptop");
+  const probook = catalogueLaptop({
+    name: "HP ProBook 4 G1iR Core 5 16GB 512GB Windows 11 Pro",
+    sku: "HP-PB",
+    model: "",
+    productId: "hp",
+    listedPriceCents: 2_280_000,
+    specifications: "HP ProBook 4 G1iR Core 5 16GB 512GB Windows 11 Pro",
+  });
+  const thinkpad = catalogueLaptop({
+    name: "Lenovo ThinkPad T14 Gen 6 Ultra 7 16GB 512GB Windows 11 Pro",
+    sku: "21QC000YZA",
+    model: "21QC000YZA",
+    productId: "t14",
+    listedPriceCents: 4_085_000,
+    specifications: "Lenovo ThinkPad T14 Gen 6 Ultra 7 16GB 512GB Windows 11 Pro",
+  });
+  const consumer = catalogueLaptop({
+    name: "Acer Aspire 3",
+    sku: "ACER-1",
+    model: "",
+    productId: "acer",
+    listedPriceCents: 900_000,
+    specifications: "Acer Aspire 3 8GB 256GB",
+  });
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [consumer, thinkpad, probook] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "QUOTE");
+  if (plan.kind !== "QUOTE") return;
+  assert.equal(plan.send, true);
+  assert.equal(plan.options.length, 2);
+  assert.equal(plan.options[0]?.unitPriceCents, 2_280_000);
+  assert.equal(plan.options[1]?.unitPriceCents, 4_085_000);
+  assert.equal(plan.options[0]?.quantity, 1);
+  assert.equal(plan.options.some((option) => /Aspire/.test(option.name)), false);
+});
+
+test("an attachment adds the specification and does not replace the body", () => {
+  const [merged] = requirementsFromSources("Please quote 2 laptops.", "Core i5\n16GB RAM\n512GB SSD\nWindows 11 Pro");
+  assert.equal(merged?.quantity, 2);
+  assert.equal(merged?.processor, "Core i5");
+  assert.equal(merged?.ramGb, 16);
+  assert.equal(merged?.storageGb, 512);
+  assert.equal(merged?.operatingSystem, "Windows 11 Pro");
+  const [kept] = requirementsFromSources("Please quote 2 x Core i5, 16GB RAM, 512GB SSD, Windows 11 Pro laptops.", "Cover sheet.");
+  assert.equal(kept?.quantity, 2);
+  assert.equal(kept?.ramGb, 16);
+  assert.match(kept?.processor ?? "", /Core i5/);
+  const [followUp] = requirementsFromSources("Recommend two professional laptops for programming at different price levels.", "16GB is fine.\nWindows 11 Pro");
+  assert.equal(followUp?.ramGb, 16);
+  assert.equal(followUp?.operatingSystem, "Windows 11 Pro");
+  assert.equal(followUp?.productType, "Laptop");
+});
+
+test("a named model is not replaced when equivalents are refused", () => {
+  const [requirement] = extractProductRequirements("Please quote 2 x Lenovo ThinkPad E14. No equivalents.");
+  const other = catalogueLaptop({
+    name: "HP ProBook 4 G1iR Core 5 16GB 512GB Windows 11 Pro",
+    sku: "HP-PB",
+    model: "",
+    listedPriceCents: 2_280_000,
+    specifications: "Core 5, 16GB RAM, 512GB SSD, Windows 11 Pro",
+  });
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [other] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "SOURCING");
+});
+
+test("a named ThinkPad is not replaced by another catalogue laptop", () => {
+  const [requirement] = extractProductRequirements("Please quote 2 x Lenovo ThinkPad E14 business laptops.");
+  assert.match(requirement?.model ?? "", /ThinkPad E14/i);
+  const other = catalogueLaptop({
+    name: "HP ProBook 4 G1iR Core 5 16GB 512GB Windows 11 Pro",
+    sku: "HP-PB",
+    model: "",
+    listedPriceCents: 2_280_000,
+    specifications: "Core 5, 16GB RAM, 512GB SSD, Windows 11 Pro",
+  });
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [other] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "SOURCING");
+});
+
+test("an equivalent request can quote a business laptop that meets the specification", () => {
+  const [requirement] = extractProductRequirements("Please quote 13 x Dell Latitude 7320 or equivalent, 16GB RAM, 512GB SSD, Windows 11 Pro.");
+  assert.match(requirement?.model ?? "", /Latitude 7320/i);
+  assert.equal(requirement?.quantity, 13);
+  const probook = catalogueLaptop({
+    name: "HP ProBook 4 G1iR Core 5 16GB 512GB Windows 11 Pro",
+    sku: "HP-PB",
+    model: "",
+    productId: "hp",
+    stockQty: 20,
+    listedPriceCents: 2_280_000,
+    specifications: "HP ProBook 4 G1iR Core 5 16GB 512GB Windows 11 Pro",
+  });
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [probook] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "QUOTE");
+  if (plan.kind !== "QUOTE") return;
+  assert.match(plan.options[0]?.name ?? "", /ProBook/);
+  assert.equal(plan.options[0]?.quantity, 13);
+});
+
+test("an exact-only model is not substituted", () => {
+  const [requirement] = extractProductRequirements("Please quote 11 x Dell Alienware m18. No alternatives.");
+  assert.match(requirement?.model ?? "", /Alienware m18/i);
+  const other = catalogueLaptop({
+    name: "HP ProBook 4 G1iR Core 5 16GB 512GB Windows 11 Pro",
+    sku: "HP-PB",
+    model: "",
+    listedPriceCents: 2_280_000,
+    specifications: "Core 5, 16GB RAM, 512GB SSD, Windows 11 Pro",
+  });
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [other] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "SOURCING");
+});
+
+test("an attachment-only specification is still read", () => {
+  const [requirement] = requirementsFromSources(
+    "Please quote the attached RFQ.",
+    "Please quote 2 business laptops.\n16GB RAM\n512GB SSD\nWindows 11 Pro",
+  );
+  assert.equal(requirement?.quantity, 2);
+  assert.equal(requirement?.ramGb, 16);
+  assert.equal(requirement?.storageGb, 512);
+  assert.equal(requirement?.operatingSystem, "Windows 11 Pro");
+});
+
+test("UF-TEST-001 is quoted at the requested quantity", () => {
+  const [requirement] = extractProductRequirements("Please quote 2 × UF-TEST-001");
+  assert.equal(requirement?.sku, "UF-TEST-001");
+  assert.equal(requirement?.quantity, 2);
+  const exact = catalogueLaptop({
+    name: "Urban Focus test laptop",
+    sku: "UF-TEST-001",
+    model: "UF-TEST-001",
+    productId: "uf-test",
+    stockQty: 10,
+    listedPriceCents: 1_500_000,
+  });
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [exact] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "QUOTE");
+  if (plan.kind !== "QUOTE") return;
+  assert.equal(plan.options[0]?.productId, "uf-test");
+  assert.equal(plan.options[0]?.quantity, 2);
+  assert.equal(plan.options[0]?.unitPriceCents, 1_500_000);
+  assert.equal(plan.send, true);
+});
+
+test("partial stock does not claim the full quantity is available", () => {
+  const [requirement] = extractProductRequirements("Please quote 10 x Lenovo ThinkPad E14.");
+  const short = catalogueLaptop({
+    name: "Lenovo ThinkPad E14",
+    sku: "E14",
+    model: "ThinkPad E14",
+    stockQty: 2,
+    listedPriceCents: 1_800_000,
+    specifications: "ThinkPad E14, 16GB RAM, 512GB SSD, Windows 11 Pro",
+  });
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [short] },
     ...margins,
     now,
   });

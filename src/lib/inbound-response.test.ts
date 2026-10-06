@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ACKNOWLEDGEMENT } from "./automation";
-import { determineInitialResponse, memoryProcessingStore, sendResponseOnce, type InitialResponse, type ResponseFacts } from "./inbound-response";
+import { determineInitialResponse, memoryProcessingStore, sendResponseOnce, customerResponseAllowed, type InitialResponse, type ResponseFacts } from "./inbound-response";
 import { CLARIFICATION_REPLY, SOURCING_REPLY } from "./sourcing";
 
 const facts = (overrides: Partial<ResponseFacts>): ResponseFacts => ({
@@ -111,4 +111,10 @@ test("a Gmail sync retry after successful processing does not send again", async
   assert.deepEqual(retry.sent, []);
   assert.equal(retry.result.blocked, true);
   assert.equal(retry.result.finished, true);
+});
+
+test("a follow-up does not send a second acknowledgement or sourcing email", () => {
+  assert.equal(customerResponseAllowed({ acknowledgementSent: true, decision: "SOURCING_REQUIRED" }), false);
+  assert.equal(customerResponseAllowed({ acknowledgementSent: true, decision: "QUOTE_READY" }), true);
+  assert.equal(customerResponseAllowed({ acknowledgementSent: false, decision: "SOURCING_REQUIRED" }), true);
 });
