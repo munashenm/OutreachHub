@@ -104,10 +104,6 @@ export function rankProductMatches(requirement: ProductRequirement, candidates: 
         method = "SEMANTIC";
         similarity = semantic;
       }
-      if (method === "NONE" && /\bthinkpad\b/i.test(`${requirement.model} ${requirement.requestedText}`) && /\bthinkpad\b/i.test(candidate.name)) {
-        method = "FUZZY";
-        similarity = Math.max(fuzzy, 0.56);
-      }
       return {
         productId: candidate.productId,
         name: candidate.name,
@@ -125,12 +121,11 @@ export function rankProductMatches(requirement: ProductRequirement, candidates: 
 
 export function unpricedCatalogueNote(requirement: ProductRequirement, matches: readonly RankedProduct[]) {
   if (matches.some((match) => (match.unitPriceCents ?? 0) > 0)) return "";
-  const family = requirement.model.toLowerCase().split(/\s+/)[0] ?? "";
+  const wanted = requirement.model.trim().toLowerCase();
   const specified = matches.filter((match) => match.method === "EXACT" || match.method === "SPECIFICATION");
-  const exactSpec = specified.filter((match) => match.similarity >= 0.88);
-  const chosen = exactSpec.find((match) => (match.stockQty ?? 0) > 0) ?? exactSpec[0] ?? specified.find((match) => (match.stockQty ?? 0) > 0) ?? specified[0]
-    ?? matches.find((match) => (match.method === "FUZZY" || match.method === "SEMANTIC") && family.length > 2 && match.name.toLowerCase().includes(family) && (match.stockQty ?? 0) > 0)
-    ?? matches.find((match) => (match.method === "FUZZY" || match.method === "SEMANTIC") && family.length > 2 && match.name.toLowerCase().includes(family));
+  const eligible = wanted.length >= 4 ? specified.filter((match) => `${match.name} ${match.sku}`.toLowerCase().includes(wanted)) : specified;
+  const exactSpec = eligible.filter((match) => match.similarity >= 0.88);
+  const chosen = exactSpec.find((match) => (match.stockQty ?? 0) > 0) ?? exactSpec[0] ?? eligible.find((match) => (match.stockQty ?? 0) > 0) ?? eligible[0];
   if (!chosen?.name) return "";
   const sku = chosen.sku ? ` (${chosen.sku})` : "";
   return `${chosen.name}${sku} is on the website catalogue. No supplier cost is on file, so no price was offered.`;
@@ -161,9 +156,41 @@ export function decideSalesResponse(input: {
       message: nothing ? EXTERNAL_SOURCING_NOTE : CLARIFICATION_QUESTION,
     };
   }
+  const quantity = Math.max(1, input.requestedQuantity);
   const priced = input.matches.filter((match) => match.unitPriceCents != null && match.unitPriceCents > 0);
+  const exactRows = input.matches.filter((match) => match.method === "EXACT");
+  if (input.requestedExact) {
+    if (exactRows.length === 0) {
+      return { action: "EXTERNAL_TASK", confidence: 0, matches: [], message: EXTERNAL_SOURCING_NOTE };
+    }
+    const exactInStock = exactRows.find((match) => (match.unitPriceCents ?? 0) > 0 && (match.stockQty ?? 0) >= quantity);
+    if (exactInStock && input.marginAllowed) {
+      const confidence = confidenceFor(exactInStock, quantity);
+      const action = input.autoSendAllowed && confidence >= 80 ? "AUTO_SEND" : "PREPARE";
+      return {
+        action,
+        confidence,
+        matches: [exactInStock],
+        message: composeSalesReply({ action, customerName: "", lines: replyLines([exactInStock], quantity), validUntil: "" }),
+      };
+    }
+    const stockKnown = exactRows.some((match) => match.stockQty != null);
+    const outOfStock = stockKnown && exactRows.every((match) => (match.stockQty ?? 0) < quantity);
+    const alternatives = priced.filter((match) => match.method !== "EXACT" && (match.stockQty ?? 0) >= quantity);
+    if (outOfStock && alternatives.length > 0 && input.marginAllowed) {
+      const confidence = confidenceFor(alternatives[0], quantity);
+      return {
+        action: "ALTERNATIVES",
+        confidence,
+        matches: alternatives.slice(0, 3),
+        message: composeSalesReply({ action: "ALTERNATIVES", customerName: "", lines: replyLines(alternatives.slice(0, 3), quantity), validUntil: "" }),
+      };
+    }
+    const held = exactRows[0];
+    return { action: "PREPARE", confidence: held ? confidenceFor(held, quantity) : 0, matches: exactRows.slice(0, 3), message: "" };
+  }
   const best = priced[0] ?? input.matches[0];
-  const confidence = best ? confidenceFor(best, input.requestedQuantity) : 0;
+  const confidence = best ? confidenceFor(best, quantity) : 0;
   if (!best) return { action: "EXTERNAL_TASK", confidence: 0, matches: [], message: EXTERNAL_SOURCING_NOTE };
   if (priced.length === 0 || !input.marginAllowed) {
     return { action: "PREPARE", confidence, matches: input.matches.slice(0, 3), message: "" };
@@ -171,16 +198,7 @@ export function decideSalesResponse(input: {
   if (confidence < 50) {
     return { action: "CLARIFY", confidence, matches: priced.slice(0, 3), message: CLARIFICATION_QUESTION };
   }
-  const exact = priced.find((match) => match.method === "EXACT" && (match.stockQty ?? 0) >= Math.max(1, input.requestedQuantity));
-  if (input.requestedExact && !exact) {
-    return {
-      action: "ALTERNATIVES",
-      confidence,
-      matches: priced.slice(0, 3),
-      message: composeSalesReply({ action: "ALTERNATIVES", customerName: "", lines: replyLines(priced.slice(0, 3), input.requestedQuantity), validUntil: "" }),
-    };
-  }
-  const chosen = exact ?? best;
+  const chosen = best;
   const action = input.autoSendAllowed && confidence >= 80 && chosen.method !== "FUZZY" && chosen.method !== "SEMANTIC" ? "AUTO_SEND" : "PREPARE";
   return {
     action,

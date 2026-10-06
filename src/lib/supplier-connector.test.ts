@@ -143,6 +143,15 @@ test("selects a supplier by stock, quantity, cost, freshness, preference, and le
   const unknownLead = choice({ supplierId: "unknown", costCents: 9000, preference: 5, leadTimeDays: null });
   assert.equal(chooseSupplierOffer([slow, unknownLead, fast], 1, now)?.supplierId, "fast");
   assert.equal(chooseSupplierOffer([stale, missingCost, cheapOut], 1, now), null);
+
+  const preferred = choice({ supplierId: "preferred", costCents: 12000, supplierClass: "PREFERRED" });
+  const backup = choice({ supplierId: "backup", costCents: 8000, supplierClass: "BACKUP" });
+  const project = choice({ supplierId: "project", costCents: 6000, supplierClass: "PROJECT_ONLY" });
+  const rejected = choice({ supplierId: "rejected", costCents: 1000, supplierClass: "REJECT" });
+  assert.equal(chooseSupplierOffer([backup, project, rejected, preferred], 1, now)?.supplierId, "preferred");
+  assert.equal(chooseSupplierOffer([project, rejected, backup], 1, now)?.supplierId, "backup");
+  assert.equal(chooseSupplierOffer([rejected, project], 1, now)?.supplierId, "project");
+  assert.equal(chooseSupplierOffer([rejected], 1, now), null);
 });
 
 test("flags a sell-price move of 15 percent or more", () => {

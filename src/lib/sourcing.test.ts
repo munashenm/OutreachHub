@@ -146,6 +146,29 @@ test("out of stock continues to another supplier instead of stopping", () => {
   assert.equal(plan.options[0]?.stockQty, 6);
 });
 
+test("a preferred supplier is quoted ahead of a cheaper backup, and a rejected supplier is left out", () => {
+  const [requirement] = extractProductRequirements("Please quote 2 x Lenovo ThinkPad E14.");
+  const preferred = candidate({ sourceName: "Preferred", costExVatCents: 1100000, supplierClass: "PREFERRED", productId: "preferred" });
+  const backup = candidate({ sourceName: "Backup", costExVatCents: 900000, supplierClass: "BACKUP", productId: "backup" });
+  const rejected = candidate({ sourceName: "Rejected", costExVatCents: 700000, supplierClass: "REJECT", productId: "rejected" });
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), supplierFeeds: [rejected, backup, preferred] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "QUOTE");
+  if (plan.kind !== "QUOTE") return;
+  assert.equal(plan.options[0]?.sourceName, "Preferred");
+  const onlyRejected = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), supplierFeeds: [rejected] },
+    ...margins,
+    now,
+  });
+  assert.equal(onlyRejected.kind, "SOURCING");
+});
+
 test("a supplier row that is not an Urban Focus product can still be quoted", () => {
   const [requirement] = extractProductRequirements("Please quote 2 x Lenovo ThinkPad E14.");
   const plan = planSourcing({

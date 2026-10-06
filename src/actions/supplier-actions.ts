@@ -4,9 +4,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { ActionState } from "@/lib/format";
 import { runAction } from "@/lib/run-action";
-import { fieldErrors, readForm, supplierSchema } from "@/lib/validators";
+import { fieldErrors, readForm, supplierSchema, supplierScorecardSchema } from "@/lib/validators";
 import { requireSession } from "@/services/auth-service";
-import { addMissingDistributors, createSupplier } from "@/services/supplier-service";
+import { addMissingDistributors, createSupplier, saveSupplierScorecard } from "@/services/supplier-service";
 
 export async function createSupplierAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   return runAction(async () => {
@@ -26,4 +26,16 @@ export async function addSouthAfricanDistributorsAction(): Promise<void> {
   const session = await requireSession();
   await addMissingDistributors({ userId: session.user.id, workspaceId: session.workspace.id });
   revalidatePath("/suppliers");
+}
+
+export async function saveSupplierScorecardAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  return runAction(async () => {
+    const session = await requireSession();
+    const parsed = supplierScorecardSchema.safeParse(readForm(formData));
+    if (!parsed.success) return { fieldErrors: fieldErrors(parsed.error) };
+    const success = await saveSupplierScorecard({ userId: session.user.id, workspaceId: session.workspace.id }, parsed.data);
+    revalidatePath("/suppliers");
+    revalidatePath(`/suppliers/${parsed.data.supplierId}`);
+    return { success };
+  });
 }

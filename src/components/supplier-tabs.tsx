@@ -6,13 +6,14 @@ const TABS = [
   ["feed", "Automatic feed"],
   ["upload", "Manual upload"],
   ["products", "Products"],
+  ["scorecard", "Scorecard"],
   ["history", "Import history"],
   ["settings", "Settings"],
 ] as const;
 
-export function SupplierTabs({ feed, upload, products, history, settings }: { feed: ReactNode; upload: ReactNode; products: ReactNode; history: ReactNode; settings: ReactNode }) {
+export function SupplierTabs({ feed, upload, products, scorecard, history, settings }: { feed: ReactNode; upload: ReactNode; products: ReactNode; scorecard: ReactNode; history: ReactNode; settings: ReactNode }) {
   const [tab, setTab] = useState<(typeof TABS)[number][0]>("feed");
-  const panel = { feed, upload, products, history, settings }[tab];
+  const panel = { feed, upload, products, scorecard, history, settings }[tab];
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2">

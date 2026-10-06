@@ -1,4 +1,5 @@
 import { priceQuotation } from "./automation";
+import { supplierClassRank, type SupplierClass } from "./supplier-scorecard";
 
 export const CLARIFICATION_REPLY = "Thank you for your request. To prepare an accurate quotation, could you please confirm the required processor, RAM, storage configuration and operating system?";
 export const ATTACHMENT_CLARIFICATION = "The specification appears to be in an attachment. Please paste the required make, model or specification, and the quantity, into your reply so we can quote it.";
@@ -62,6 +63,7 @@ export type SourcingCandidate = {
   fresh: boolean;
   checkedAt: string | null;
   reputable: boolean;
+  supplierClass?: SupplierClass;
 };
 
 export type SourcingPools = {
@@ -280,28 +282,30 @@ export function planSourcing(input: {
 
 function chooseSources(requirement: ProductRequirement, pools: SourcingPools, now: Date, freshnessMs: number, margins: { minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }) {
   const quantity = Math.max(1, requirement.quantity ?? 1);
-  const seen = new Set<string>();
   const ranked = SOURCE_ORDER.flatMap((sourceKind) => poolFor(pools, sourceKind).map((candidate) => ({ candidate, sourceKind })))
-    .filter(({ candidate }) => usableCandidate(candidate, now, freshnessMs))
+    .filter(({ candidate }) => candidate.supplierClass !== "REJECT" && usableCandidate(candidate, now, freshnessMs))
     .map(({ candidate }) => ({ candidate, grade: compareRequirement(requirement, candidate) }))
     .filter((item) => item.grade === "EXACT" || item.grade === "MEETS_REQUIREMENT" || item.grade === "EXCEEDS_REQUIREMENT")
-    .filter((item) => {
-      const key = `${item.candidate.sourceKind}|${item.candidate.sku}|${item.candidate.name}`.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
     .filter((item) => item.candidate.stockKnown && item.candidate.stockQty != null && item.candidate.stockQty >= quantity && item.candidate.fresh);
   ranked.sort((left, right) => {
     const source = SOURCE_ORDER.indexOf(left.candidate.sourceKind) - SOURCE_ORDER.indexOf(right.candidate.sourceKind);
     if (source !== 0) return source;
     const grade = GRADE_ORDER.indexOf(left.grade) - GRADE_ORDER.indexOf(right.grade);
     if (grade !== 0) return grade;
+    const rank = supplierClassRank(left.candidate.supplierClass) - supplierClassRank(right.candidate.supplierClass);
+    if (rank !== 0) return rank;
     return (left.candidate.costExVatCents ?? left.candidate.listedPriceCents ?? 0) - (right.candidate.costExVatCents ?? right.candidate.listedPriceCents ?? 0);
+  });
+  const seen = new Set<string>();
+  const unique = ranked.filter((item) => {
+    const key = `${item.candidate.sourceKind}|${item.candidate.sku}|${item.candidate.name}`.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
   const options: PricedSource[] = [];
   let blocked = "";
-  for (const item of ranked) {
+  for (const item of unique) {
     if (options.length >= 3) break;
     const priced = priceCandidate(requirement, item.candidate, item.grade, quantity, margins);
     if (!priced) continue;

@@ -680,6 +680,28 @@ model Supplier {
   prices    SupplierPrice[]
   feedItems SupplierFeedItem[]
   imports   SupplierImport[]
+  scorecard SupplierScorecard?
+
+  @@index([workspaceId])
+}
+
+model SupplierScorecard {
+  id                      String   @id @default(cuid())
+  workspaceId             String
+  supplierId              String   @unique
+  grossMargin             Int?
+  moq                     Int?
+  feedAvailability        Int?
+  deliveryToSouthAfrica   Int?
+  warrantyRma             Int?
+  certifications          Int?
+  resellerProtection      Int?
+  productUniqueness       Int?
+  localCompetition        Int?
+  notes                   String   @default("")
+  updatedAt               DateTime @updatedAt
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId])
 }
