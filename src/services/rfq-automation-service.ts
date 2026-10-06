@@ -31,6 +31,7 @@ import { analyseRfqDocuments, analysisTextForRfq, listTenderAnalyses, responseMo
 import { matchRequestedSpecification, UNPRICED_LINE, type AnalysisMatch } from "../lib/document-analysis";
 import { determineInitialResponse, sendResponseOnce, customerResponseAllowed, type InitialResponse, type ProcessingRow, type ProcessingStore, type ResponseFacts } from "../lib/inbound-response";
 import { asksToProceed, followUpChangesRequirements, requestStrictness } from "../lib/rfq-match";
+import { retryDelayMs } from "../lib/quote-send";
 import { analyzeInboundEmail, parseRfqAnalysis, type RfqAnalysis } from "../lib/ai/rfq-analyzer";
 import { requirementsForSourcing } from "../lib/ai/rfq-requirements";
 import { generateQuotePdf } from "./quotation-pdf-service";
@@ -45,13 +46,36 @@ export async function processInboundAutomation() {
   });
   const results: { messageId: string; action?: string; error?: string }[] = [];
   for (const message of messages) {
+    const gmailMessageId = message.externalId || message.id;
+    const gate = await getDb().inboundMessageProcessing.findUnique({ where: { gmailMessageId }, select: { nextRetryAt: true, attemptCount: true } });
+    if (gate?.nextRetryAt && gate.nextRetryAt > new Date()) {
+      results.push({ messageId: message.id, action: "retry-waiting" });
+      continue;
+    }
     try {
       results.push({ messageId: message.id, action: await processInboundMessage(message.id) });
     } catch (error) {
-      results.push({ messageId: message.id, error: error instanceof AppError ? error.message : "The message could not be processed." });
+      const reason = error instanceof Error ? error.message.slice(0, 300) : "The message could not be processed.";
+      console.error(`RFQ processing failed for ${message.id}: ${reason}`);
+      const attemptCount = (gate?.attemptCount ?? 0) + 1;
+      const delay = retryDelayMs(attemptCount);
+      if (delay == null) {
+        await getDb().message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
+        await getDb().rfq.updateMany({ where: { sourceMessageId: message.id }, data: { status: "FAILED", lastError: reason } });
+        results.push({ messageId: message.id, action: "stopped" });
+        continue;
+      }
+      const nextRetryAt = new Date(Date.now() + delay);
+      await getDb().inboundMessageProcessing.upsert({
+        where: { gmailMessageId },
+        create: { workspaceId: message.workspaceId, messageId: message.id, gmailMessageId, threadId: message.threadId ?? "", processingStatus: "FAILED", attemptCount, nextRetryAt, lastError: reason },
+        update: { attemptCount, nextRetryAt, lastError: reason, processingStatus: "FAILED" },
+      });
+      await getDb().rfq.updateMany({ where: { OR: [{ sourceMessageId: message.id }, { threadId: message.threadId || "missing" }] }, data: { lastError: reason } });
+      results.push({ messageId: message.id, action: "retry-scheduled" });
     }
   }
-  return { processed: results.filter((result) => !result.error).length, failed: results.filter((result) => result.error).length, results };
+  return { processed: results.filter((result) => result.action && result.action !== "retry-waiting" && result.action !== "retry-scheduled" && result.action !== "stopped").length, failed: results.filter((result) => result.error).length, results };
 }
 
 export async function getAutomationReport(workspaceId: string) {

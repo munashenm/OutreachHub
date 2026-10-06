@@ -74,8 +74,20 @@ export async function analyseRfqDocuments(workspaceId: string, rfqId: string) {
   const documents: Array<{ filename: string; attachmentId: string | null; pages: { page: number; text: string }[]; warnings: string[] }> = [];
   if (rfq.sourceMessage.body.trim()) documents.push({ filename: "email", attachmentId: null, pages: [{ page: 1, text: rfq.sourceMessage.body }], warnings: [] });
   for (const file of rfq.sourceMessage.attachments) {
-    const read = await readDocumentFile(file.filename, file.contentType, Buffer.from(file.content));
-    const pages = [...read.pages];
+    let read: { pages: { page: number; text: string }[]; warnings: string[] };
+    try {
+      read = await readDocumentFile(file.filename, file.contentType, Buffer.from(file.content));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "The file could not be read.";
+      documents.push({
+        filename: file.filename,
+        attachmentId: file.id,
+        pages: [{ page: 1, text: "" }],
+        warnings: [`${file.filename} could not be read. The email body is still used. ${reason}`.slice(0, 300)],
+      });
+      continue;
+    }
+    const pages = read.pages.map((page) => ({ ...page, text: page.text.replaceAll("\u0000", "") }));
     const warnings = [...read.warnings];
     if (supportedAttachment(file.filename, file.contentType) === "image") {
       const vision = await readImageText({ filename: file.filename, contentType: file.contentType, bytes: Buffer.from(file.content) });

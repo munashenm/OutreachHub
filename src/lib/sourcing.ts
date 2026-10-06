@@ -488,9 +488,30 @@ function quoteGrade(requirement: ProductRequirement, candidate: SourcingCandidat
 function priceCandidate(requirement: ProductRequirement, candidate: SourcingCandidate, grade: MatchGrade, quantity: number, margins: { minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }) {
   const published = candidate.sourceKind === "URBAN_FOCUS_CATALOGUE" && (candidate.listedPriceCents ?? 0) > 0 ? candidate.listedPriceCents : null;
   if (published) {
-    if ((candidate.costExVatCents ?? 0) > 0) {
-      const margin = ((published - (candidate.costExVatCents ?? 0)) / published) * 100;
+    const cost = candidate.costExVatCents ?? 0;
+    if (cost > 0) {
+      const margin = ((published - cost) / published) * 100;
       if (margin < margins.minimumMarginPercent) return { marginBelowMinimum: true as const, option: null };
+      return {
+        marginBelowMinimum: false as const,
+        option: {
+          role: grade === "EXCEEDS_REQUIREMENT" ? "Upgrade" as const : "Recommended" as const,
+          name: candidate.name,
+          specifications: candidate.specifications,
+          quantity,
+          unitPriceCents: published,
+          sourceKind: candidate.sourceKind,
+          sourceName: candidate.sourceName,
+          sourceUrl: candidate.sourceUrl,
+          checkedAt: candidate.checkedAt,
+          match: grade,
+          confidence: "HIGH" as const,
+          costStatus: "VERIFIED" as const,
+          canSend: margin >= margins.autoSendMarginPercent,
+          stockQty: candidate.stockQty,
+          productId: candidate.productId,
+        },
+      };
     }
     return {
       marginBelowMinimum: false as const,
@@ -506,8 +527,8 @@ function priceCandidate(requirement: ProductRequirement, candidate: SourcingCand
         checkedAt: candidate.checkedAt,
         match: grade,
         confidence: "HIGH" as const,
-        costStatus: "VERIFIED" as const,
-        canSend: true,
+        costStatus: "NEEDS_REVIEW" as const,
+        canSend: false,
         stockQty: candidate.stockQty,
         productId: candidate.productId,
       },
