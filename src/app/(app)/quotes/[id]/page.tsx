@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { formatCents, formatQuoteDate, lineTotalCents, quoteTotalCents } from "@/lib/quote";
-import { urbanFocusQuoteNumber } from "@/lib/quotation-document";
+import { displayedQuoteNumber } from "@/lib/quotation-document";
 import { fullName } from "@/lib/format";
 import { requireSession } from "@/services/auth-service";
 import { getQuoteDocument } from "@/services/quote-service";
@@ -29,7 +29,7 @@ export default async function QuoteDocumentPage({ params }: { params: Promise<{ 
       </div>
       <header>
         <p className="text-sm text-muted">Quotation</p>
-        <h1 className="text-2xl font-semibold">{urbanFocusQuoteNumber(quote.number, quote.issuedAt)}</h1>
+        <h1 className="text-2xl font-semibold">{displayedQuoteNumber(quote.number, quote.issuedAt, quote.pdfFilename)}</h1>
         <p className="mt-2 text-sm">Issued {formatQuoteDate(quote.issuedAt)}</p>
         <p className="text-sm">Valid until {formatQuoteDate(quote.validUntil)}</p>
       </header>

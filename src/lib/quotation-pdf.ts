@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import PDFDocument from "pdfkit";
-import { moneyLabel, type QuotationDocument } from "./quotation-document";
+import { moneyLabel, VAT_RATE, type QuotationDocument } from "./quotation-document";
 
 type Pdf = InstanceType<typeof PDFDocument>;
 
@@ -38,32 +38,25 @@ function readLogo() {
 }
 
 function drawHeader(pdf: Pdf, document: QuotationDocument, logo: Buffer | null) {
-  if (logo) pdf.image(logo, 40, 36, { fit: [210, 42] });
-  pdf.fillColor(NAVY).font("Helvetica-Bold").fontSize(16).text("FORMAL QUOTATION", 280, 36, { width: 275, align: "right" });
+  if (logo) pdf.image(logo, 40, 32, { fit: [210, 40] });
+  pdf.fillColor(NAVY).font("Helvetica-Bold").fontSize(16).text("QUOTATION", 280, 32, { width: 275, align: "right" });
   pdf.font("Helvetica").fontSize(9).fillColor(MUTED);
   const facts = [
     `Quotation No: ${document.numberLabel}`,
     `Date: ${document.issuedLabel}`,
     `Valid Until: ${document.validUntilLabel}`,
-    `Availability: ${document.availability}`,
   ];
-  facts.forEach((fact, index) => pdf.text(fact, 280, 58 + index * 12, { width: 275, align: "right" }));
-  pdf.moveTo(40, 128).lineTo(555, 128).lineWidth(2).strokeColor(BLUE).stroke();
-  pdf.y = 142;
+  facts.forEach((fact, index) => pdf.text(fact, 280, 54 + index * 12, { width: 275, align: "right" }));
+  pdf.moveTo(40, 96).lineTo(555, 96).lineWidth(1.5).strokeColor(BLUE).stroke();
+  pdf.y = 108;
 }
 
 function drawParties(pdf: Pdf, document: QuotationDocument) {
   const top = pdf.y;
   pdf.fillColor(NAVY).font("Helvetica-Bold").fontSize(10).text("PREPARED FOR", 40, top);
   pdf.font("Helvetica").fontSize(9).fillColor("#111827");
-  writeLines(pdf, 40, top + 16, 240, [
-    document.customerCompany,
-    document.contactName,
-    document.email,
-    document.customerReference ? `Reference ${document.customerReference}` : "",
-    document.deliveryLocation ? `Delivery ${document.deliveryLocation}` : "",
-    document.subject ? `Requirement ${document.subject}` : "",
-  ]);
+  const prepared = [document.customerCompany, document.contactName, document.email, document.customerPhone];
+  writeLines(pdf, 40, top + 16, 250, prepared);
   pdf.fillColor(NAVY).font("Helvetica-Bold").fontSize(10).text("SUPPLIER", 320, top);
   pdf.font("Helvetica").fontSize(9).fillColor("#111827");
   const supplier = [
@@ -75,14 +68,18 @@ function drawParties(pdf: Pdf, document: QuotationDocument) {
     document.company.showVatNumber ? `VAT ${document.company.vatNumber}` : "",
   ];
   writeLines(pdf, 320, top + 16, 230, supplier);
-  pdf.y = top + 16 + supplier.filter(Boolean).length * 12 + 16;
+  pdf.y = top + 16 + Math.max(prepared.filter(Boolean).length, supplier.filter(Boolean).length) * 12 + 6;
+  if (document.customerReference) {
+    pdf.font("Helvetica").fontSize(9).fillColor("#111827").text(`Customer RFQ / Reference: ${document.customerReference}`, 40, pdf.y, { width: 515 });
+    pdf.moveDown(0.4);
+  }
 }
 
 function drawSchedule(pdf: Pdf, document: QuotationDocument) {
   ensureSpace(pdf, document, 80);
-  const columns = [40, 70, 330, 380, 470];
-  const widths = [24, 250, 44, 84, 85];
-  drawRow(pdf, columns, widths, ["#", "PROPOSED MAKE / MODEL & CONFIGURATION", "QTY", "UNIT PRICE EXCL VAT", "LINE TOTAL EXCL VAT"], true);
+  const columns = [40, 64, 312, 354, 456];
+  const widths = [22, 242, 38, 98, 99];
+  drawRow(pdf, columns, widths, ["#", "DESCRIPTION", "QTY", "UNIT PRICE EXCL. VAT", "TOTAL EXCL. VAT"], true);
   document.lines.forEach((line, index) => {
     const body = [line.description, line.configuration, line.identity].filter(Boolean).join("\n");
     pdf.font("Helvetica").fontSize(8);
@@ -94,58 +91,85 @@ function drawSchedule(pdf: Pdf, document: QuotationDocument) {
     pdf.text(line.scheduleNumber || String(index + 1), columns[0] + 4, y + 6, { width: widths[0] });
     pdf.text(body, columns[1] + 4, y + 6, { width: widths[1] - 8 });
     pdf.text(String(line.quantity), columns[2] + 4, y + 6, { width: widths[2] - 8, align: "right" });
-    pdf.text(moneyLabel(line.unitPriceCents, document.currency), columns[3] + 4, y + 6, { width: widths[3] - 8, align: "right" });
-    pdf.text(moneyLabel(line.lineTotalCents, document.currency), columns[4] + 4, y + 6, { width: widths[4] - 8, align: "right" });
+    pdf.text(moneyLabel(line.unitPriceCents), columns[3] + 4, y + 6, { width: widths[3] - 8, align: "right" });
+    pdf.text(moneyLabel(line.lineTotalCents), columns[4] + 4, y + 6, { width: widths[4] - 8, align: "right" });
     pdf.y = y + height;
   });
 }
 
 function drawTotals(pdf: Pdf, document: QuotationDocument) {
-  ensureSpace(pdf, document, 70);
+  if (document.alternatives) {
+    drawAlternativeTotals(pdf, document);
+    return;
+  }
+  ensureSpace(pdf, document, 62);
   const rows = [
-    ["Subtotal excl VAT", moneyLabel(document.subtotalExclCents, document.currency)],
-    ["VAT @ 15%", moneyLabel(document.vatCents, document.currency)],
-    ["TOTAL INCL VAT", moneyLabel(document.totalInclCents, document.currency)],
+    ["Subtotal Excl. VAT", moneyLabel(document.subtotalExclCents)],
+    [`VAT @ ${VAT_RATE}%`, moneyLabel(document.vatCents)],
+    ["TOTAL INCL. VAT", moneyLabel(document.totalInclCents)],
   ];
   for (const [index, row] of rows.entries()) {
-    const y = pdf.y + 4;
-    pdf.font(index === 2 ? "Helvetica-Bold" : "Helvetica").fontSize(10).fillColor(NAVY);
-    pdf.text(row[0], 320, y, { width: 120, lineBreak: false });
+    const y = pdf.y + 2;
+    const total = index === rows.length - 1;
+    pdf.font(total ? "Helvetica-Bold" : "Helvetica").fontSize(total ? 12 : 9).fillColor(NAVY);
+    pdf.text(row[0], 300, y, { width: 140, lineBreak: false });
     pdf.text(row[1], 440, y, { width: 115, align: "right", lineBreak: false });
-    pdf.y = y + 16;
+    pdf.y = y + (total ? 18 : 14);
   }
+  pdf.moveDown(0.3);
+}
+
+function drawAlternativeTotals(pdf: Pdf, document: QuotationDocument) {
+  ensureSpace(pdf, document, 36 + document.lines.length * 46);
+  pdf.font("Helvetica").fontSize(8).fillColor("#111827").text("These options are alternatives. Choose one. The amounts below are not added together.", 40, pdf.y, { width: 515 });
   pdf.moveDown(0.4);
-  pdf.font("Helvetica").fontSize(8).fillColor("#111827").text(document.customerMessage, 40, pdf.y, { width: 515 });
-  pdf.moveDown(0.4);
+  for (const line of document.lines) {
+    const label = (line.description.split("\n")[0] ?? "Option").replace(/:.*/, "").trim();
+    const vat = Math.round((line.lineTotalCents * VAT_RATE) / 100);
+    const rows = [
+      [`${label} excl. VAT`, moneyLabel(line.lineTotalCents)],
+      [`VAT @ ${VAT_RATE}%`, moneyLabel(vat)],
+      [`${label} INCL. VAT`, moneyLabel(line.lineTotalCents + vat)],
+    ];
+    for (const [index, row] of rows.entries()) {
+      const y = pdf.y + 2;
+      const total = index === rows.length - 1;
+      pdf.font(total ? "Helvetica-Bold" : "Helvetica").fontSize(total ? 11 : 9).fillColor(NAVY);
+      pdf.text(row[0], 40, y, { width: 360, lineBreak: false });
+      pdf.text(row[1], 440, y, { width: 115, align: "right", lineBreak: false });
+      pdf.y = y + (total ? 16 : 13);
+    }
+    pdf.moveDown(0.2);
+  }
 }
 
 function drawTerms(pdf: Pdf, document: QuotationDocument) {
-  ensureSpace(pdf, document, 40);
-  pdf.fillColor(NAVY).font("Helvetica-Bold").fontSize(11).text("COMMERCIAL TERMS", 40, pdf.y);
-  pdf.moveDown(0.3);
+  ensureSpace(pdf, document, 36);
+  pdf.fillColor(NAVY).font("Helvetica-Bold").fontSize(10).text("COMMERCIAL TERMS", 40, pdf.y);
+  pdf.moveDown(0.2);
   for (const term of document.terms) {
+    const line = `${term.label}. ${term.text}`;
     pdf.font("Helvetica").fontSize(8);
-    const height = pdf.heightOfString(term.label, { width: 515 }) + pdf.heightOfString(term.text, { width: 515 }) + 8;
+    const height = pdf.heightOfString(line, { width: 515 }) + 3;
     ensureSpace(pdf, document, height);
-    pdf.font("Helvetica-Bold").fontSize(8).fillColor(NAVY).text(term.label, 40, pdf.y, { width: 515 });
-    pdf.font("Helvetica").fontSize(8).fillColor("#111827").text(term.text, 40, pdf.y, { width: 515 });
-    pdf.moveDown(0.2);
+    pdf.fillColor("#111827").text(line, 40, pdf.y, { width: 515 });
+    pdf.moveDown(0.1);
   }
 }
 
 function drawBanking(pdf: Pdf, document: QuotationDocument) {
   if (!document.banking) return;
-  ensureSpace(pdf, document, 70);
-  pdf.fillColor(NAVY).font("Helvetica-Bold").fontSize(11).text("BANKING DETAILS", 40, pdf.y);
-  pdf.font("Helvetica").fontSize(8).fillColor("#111827");
   const lines = [
-    document.banking.bankName,
-    document.banking.accountName,
-    document.banking.accountType,
-    document.banking.accountNumber ? `Account ${document.banking.accountNumber}` : "",
-    document.banking.branchCode ? `Branch ${document.banking.branchCode}` : "",
+    `Bank: ${document.banking.bankName}`,
+    `Account Number: ${document.banking.accountNumber}`,
+    `Account Type: ${document.banking.accountType}`,
+    `Branch Code: ${document.banking.branchCode}`,
     document.banking.reference ? `Payment Reference: ${document.banking.reference}` : "",
   ].filter(Boolean);
+  ensureSpace(pdf, document, 18 + lines.length * 11);
+  pdf.moveDown(0.3);
+  pdf.fillColor(NAVY).font("Helvetica-Bold").fontSize(10).text("BANKING DETAILS", 40, pdf.y);
+  pdf.font("Helvetica").fontSize(8).fillColor("#111827");
   for (const line of lines) pdf.text(line, 40, pdf.y, { width: 515 });
 }
 
@@ -177,7 +201,7 @@ function drawCompliance(pdf: Pdf, document: QuotationDocument) {
 
 function drawFooter(pdf: Pdf, document: QuotationDocument) {
   const company = document.company;
-  const footer = [company.legalName, ...company.addressLines, company.phone, company.email, company.website].filter(Boolean).join("  ·  ");
+  const footer = [company.legalName, company.website].filter(Boolean).join("  ·  ");
   const bottom = pdf.page.margins.bottom;
   pdf.page.margins.bottom = 0;
   pdf.font("Helvetica").fontSize(7).fillColor(MUTED);
@@ -187,13 +211,15 @@ function drawFooter(pdf: Pdf, document: QuotationDocument) {
 
 function drawRow(pdf: Pdf, columns: number[], widths: number[], labels: string[], header: boolean) {
   const y = pdf.y;
-  if (header) pdf.rect(40, y, 515, 22).fill(NAVY);
+  const height = header ? 26 : 22;
+  if (header) pdf.rect(40, y, 515, height).fill(NAVY);
   pdf.fillColor(header ? "#FFFFFF" : "#111827").font("Helvetica-Bold").fontSize(7);
   labels.forEach((label, index) => {
     if (!label) return;
-    pdf.text(label, columns[index] + 4, y + 6, { width: widths[index] - 8, lineBreak: false });
+    pdf.text(label, columns[index] + 3, y + 5, { width: widths[index] - 6, height: height - 6, lineBreak: header });
+    pdf.y = y;
   });
-  pdf.y = y + 22;
+  pdf.y = y + height;
   pdf.fillColor("#111827");
 }
 

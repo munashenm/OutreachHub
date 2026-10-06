@@ -1,3 +1,4 @@
+// Delays are exact on nextRetryAt. The only scheduler is the Gmail worker, which runs every 15 minutes, so a 1-minute or 5-minute delay is picked up on the next tick.
 const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000, 4 * 60 * 60_000];
 
 export function quoteSendKey(quoteId: string, version: number) {

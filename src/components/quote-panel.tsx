@@ -4,7 +4,7 @@ import { useActionState, useState } from "react";
 import { addQuoteLineAction, removeQuoteLineAction, sendQuoteAction } from "@/actions/quote-actions";
 import { Field, buttonPrimary, buttonSecondary, inputClass, textAreaClass } from "@/components/ui";
 import { formatCents, formatQuoteEmail, lineTotalCents, parseMoneyToCents, quoteTotalCents } from "@/lib/quote";
-import { urbanFocusQuoteNumber } from "@/lib/quotation-document";
+import { displayedQuoteNumber } from "@/lib/quotation-document";
 import { linesExceedingStock, quoteMarginBlock, sellMarginPercent } from "@/lib/stock";
 import { initialActionState } from "@/lib/format";
 
@@ -26,6 +26,7 @@ export function QuotePanel({
   emailBlocked = "",
   quoteNumber = null,
   issuedAt = null,
+  pdfFilename = "",
 }: {
   rfqId: string;
   quoteId: string | null;
@@ -41,6 +42,7 @@ export function QuotePanel({
   emailBlocked?: string;
   quoteNumber?: number | null;
   issuedAt?: string | null;
+  pdfFilename?: string;
 }) {
   const [state, formAction, pending] = useActionState(addQuoteLineAction, initialActionState);
   const [productId, setProductId] = useState("");
@@ -69,12 +71,13 @@ export function QuotePanel({
   const total = quoteTotalCents(lines.map((line) => ({ quantity: Number(line.quantity), unitPriceCents: line.unitPriceCents })));
   const pdfQuery = `mode=${documentMode}&export=${exportQuote ? "1" : "0"}`;
   const issued = issuedAt ? new Date(issuedAt) : null;
-  const quotationNumber = quoteNumber != null && issued ? urbanFocusQuoteNumber(quoteNumber, issued) : "";
+  const quotationNumber = quoteNumber != null && issued ? displayedQuoteNumber(quoteNumber, issued, pdfFilename) : "";
   const preview = lines.length === 0 ? "" : formatQuoteEmail({
     subject,
     currency,
     number: quoteNumber,
     issuedAt: issued ?? undefined,
+    storedFilename: pdfFilename,
     validDays: Number(validDays),
     customerName,
     companyName,

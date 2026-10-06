@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatQuoteEmail, formatQuoteNumber, lineTotalCents, parseMoneyToCents, parseQuantity, quoteTotalCents, quoteValidUntil, snapshotQuoteLine } from "./quote";
+import { displayedQuoteNumber, formatCurrency, formatQuoteDate, formatQuoteEmail, formatQuoteNumber, lineTotalCents, parseMoneyToCents, parseQuantity, quoteTotalCents, quoteValidUntil, snapshotQuoteLine, urbanFocusQuoteNumber } from "./quote";
 
 test("parses rand amounts and quantities", () => {
   assert.equal(parseMoneyToCents("1 299,50"), 129950);
@@ -30,7 +30,15 @@ test("formats a quotation email without marking it sent", () => {
     lines: [{ description: "24-port switch", quantity: 2, unitPriceCents: 250000 }],
   });
   assert.equal(formatQuoteNumber(7, issuedAt), "Q-2026-0007");
-  assert.match(body, /Quotation No: UF-Q-20260929-0007/);
+  assert.equal(urbanFocusQuoteNumber(1, new Date("2026-10-06T08:00:00.000Z")), "UF-Q-261006-0001");
+  assert.equal(urbanFocusQuoteNumber(1, new Date("2027-10-06T08:00:00.000Z")), "UF-Q-271006-0001");
+  assert.equal(formatQuoteDate(new Date("2026-10-06T08:00:00.000Z")), "6 October 2026");
+  assert.equal(displayedQuoteNumber(1, new Date("2026-10-06T08:00:00.000Z"), "UF-Q-20261006-0001.pdf"), "UF-Q-20261006-0001");
+  assert.equal(formatCurrency(100), "R 100.00");
+  assert.equal(formatCurrency(1250), "R 1,250.00");
+  assert.equal(formatCurrency(24850.5), "R 24,850.50");
+  assert.equal(formatCurrency(24999), "R 24,999.00");
+  assert.match(body, /Quotation No: UF-Q-260929-0007/);
   assert.match(body, /Valid until 13 October 2026/);
   assert.match(body, /Jane Smith/);
   assert.match(body, /24-port switch/);

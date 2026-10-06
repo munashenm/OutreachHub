@@ -51,8 +51,14 @@ export function formatQuoteNumber(sequence: number, issuedAt: Date) {
 }
 
 export function urbanFocusQuoteNumber(sequence: number, issuedAt: Date) {
-  const stamp = zonedDateLabel(issuedAt).replaceAll("-", "");
-  return `UF-Q-${stamp}-${String(sequence).padStart(4, "0")}`;
+  const [year, month, day] = zonedDateLabel(issuedAt).split("-");
+  return `UF-Q-${year.slice(-2)}${month}${day}-${String(sequence).padStart(4, "0")}`;
+}
+
+export function displayedQuoteNumber(sequence: number, issuedAt: Date, storedFilename = "") {
+  const stored = storedFilename.trim().replace(/\.pdf$/i, "");
+  if (/^UF-Q-\d{8}-\d{4}$/.test(stored)) return stored;
+  return urbanFocusQuoteNumber(sequence, issuedAt);
 }
 
 export function quoteValidUntil(issuedAt: Date, validDays: number) {
@@ -76,6 +82,13 @@ export function formatCents(cents: number, currency = "ZAR") {
   return `${currency} ${whole}.${fraction}`;
 }
 
+export function formatCurrency(amount: number) {
+  const sign = amount < 0 ? "-" : "";
+  const [whole, fraction] = Math.abs(amount).toFixed(2).split(".");
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${sign}R ${grouped}.${fraction}`;
+}
+
 export function snapshotQuoteLine(product: { specifications: string; imageUrls: string[] } | null) {
   return {
     specifications: product?.specifications ?? "",
@@ -89,6 +102,7 @@ export function formatQuoteEmail(input: {
   lines: { description: string; quantity: number; unitPriceCents: number; specifications?: string; imageUrls?: string[] }[];
   number?: number | null;
   issuedAt?: Date;
+  storedFilename?: string;
   validDays?: number;
   validUntil?: Date | null;
   customerName?: string;
@@ -99,7 +113,7 @@ export function formatQuoteEmail(input: {
   const validUntil = input.validUntil ?? quoteValidUntil(issuedAt, input.validDays ?? 14);
   const heading = input.number == null
     ? "Quotation number is assigned when this quote is sent."
-    : `Quotation No: ${urbanFocusQuoteNumber(input.number, issuedAt)}`;
+    : `Quotation No: ${displayedQuoteNumber(input.number, issuedAt, input.storedFilename ?? "")}`;
   const rows = input.lines.map((line) => {
     const total = lineTotalCents(line.quantity, line.unitPriceCents) ?? 0;
     const parts = [`${line.description} — qty ${line.quantity} — ${formatCents(line.unitPriceCents, input.currency)} — ${formatCents(total, input.currency)}`];

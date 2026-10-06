@@ -583,7 +583,7 @@ export async function holdsForProduct(workspaceId: string, productId: string) {
       select: {
         id: true,
         quantity: true,
-        quote: { select: { id: true, number: true, issuedAt: true, rfqId: true } },
+        quote: { select: { id: true, number: true, issuedAt: true, rfqId: true, pdfFilename: true } },
       },
     }),
     getDb().storeOrderLine.findMany({
