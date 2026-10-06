@@ -53,7 +53,11 @@ export async function analysisTextForRfq(rfqId: string) {
 }
 
 export async function responseModeForRfq(rfqId: string): Promise<ResponseMode | ""> {
-  const rows = await getDb().tenderAnalysis.findMany({ where: { rfqId }, select: { responseMode: true } });
+  // A plain customer email is already parsed by the RFQ pipeline. Only an attached document can hold the quotation.
+  const rows = await getDb().tenderAnalysis.findMany({
+    where: { rfqId, attachmentId: { not: null } },
+    select: { responseMode: true },
+  });
   const modes = rows.map((row) => row.responseMode);
   if (modes.includes("TENDER_PACKAGE")) return "TENDER_PACKAGE";
   if (modes.includes("CANNOT_QUOTE")) return "CANNOT_QUOTE";
