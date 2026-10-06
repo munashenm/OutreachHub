@@ -18,7 +18,7 @@ import { nameKey } from "../lib/automation";
 import { barcodeKey, brandModelKey, mpnKey, skuKey } from "../lib/catalogue-reconcile";
 import { getDb, isUniqueViolation } from "../lib/db";
 import { AppError } from "../lib/errors";
-import { chooseSupplierOffer, priceChangeNeedsApproval } from "../lib/supplier-connector";
+import { classFromScorecard, SCORECARD_FIELD_SELECT, supplierClassRank } from "../lib/supplier-scorecard";
 import { recordActivity } from "./activity-service";
 import { extractQuotationFields } from "./ai-service";
 import { sendQuote } from "./quote-service";
@@ -565,18 +565,19 @@ export async function sourcingPools(workspaceId: string): Promise<SourcingPools>
   const freshAfter = new Date(now - 24 * 60 * 60 * 1000);
   const [products, offers, feedItems, external] = await Promise.all([
     db.product.findMany({ where: { workspaceId, active: true }, select: { id: true, sku: true, name: true, brand: true, manufacturerPartNumber: true, specifications: true, stockOnHand: true } }),
-    db.supplierPrice.findMany({ where: { workspaceId }, include: { supplier: { select: { name: true, markupPercent: true, authType: true, priceSyncIntervalMinutes: true } } } }),
+    db.supplierPrice.findMany({ where: { workspaceId }, include: { supplier: { select: { name: true, markupPercent: true, authType: true, priceSyncIntervalMinutes: true, scorecard: { select: SCORECARD_FIELD_SELECT } } } } }),
     db.supplierFeedItem.findMany({
       where: { workspaceId },
-      include: { supplier: { select: { name: true, markupPercent: true, authType: true, priceSyncIntervalMinutes: true, leadTimeDays: true } } },
+      include: { supplier: { select: { name: true, markupPercent: true, authType: true, priceSyncIntervalMinutes: true, leadTimeDays: true, scorecard: { select: SCORECARD_FIELD_SELECT } } } },
     }),
     db.externalSourceOffer.findMany({ where: { workspaceId, checkedAt: { gte: freshAfter }, sourceUrl: { not: "" } } }),
   ]);
   const bestOffer = new Map<string, (typeof offers)[number]>();
   for (const offer of offers) {
-    if (!offer.costKnown || offer.costCents <= 0) continue;
+    if (!offer.costKnown || offer.costCents <= 0 || classFromScorecard(offer.supplier.scorecard) === "REJECT") continue;
     const current = bestOffer.get(offer.productId);
-    if (!current || offer.costCents < current.costCents) bestOffer.set(offer.productId, offer);
+    const rank = current ? supplierClassRank(classFromScorecard(offer.supplier.scorecard)) - supplierClassRank(classFromScorecard(current.supplier.scorecard)) : -1;
+    if (!current || rank < 0 || (rank === 0 && offer.costCents < current.costCents)) bestOffer.set(offer.productId, offer);
   }
   const catalogue: SourcingCandidate[] = products.map((product) => {
     const offer = bestOffer.get(product.id);
@@ -637,6 +638,7 @@ export async function sourcingPools(workspaceId: string): Promise<SourcingPools>
       fresh,
       checkedAt: offer.updatedAt.toISOString(),
       reputable: true,
+      supplierClass: classFromScorecard(offer.supplier.scorecard),
     };
     if (row.sourceKind === "SUPPLIER_API") supplierApis.push(row);
     else supplierFeeds.push(row);
@@ -670,6 +672,7 @@ export async function sourcingPools(workspaceId: string): Promise<SourcingPools>
       fresh,
       checkedAt: item.updatedAt.toISOString(),
       reputable: true,
+      supplierClass: classFromScorecard(item.supplier.scorecard),
     };
     if (row.sourceKind === "SUPPLIER_API") supplierApis.push(row);
     else supplierFeeds.push(row);

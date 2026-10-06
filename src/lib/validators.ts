@@ -238,6 +238,22 @@ export const supplierSchema = z.object({
   notes: z.string().trim().max(4000).optional().default(""),
 });
 
+const scoreValue = z.string().trim().refine((value) => value === "" || ["1", "2", "3", "4", "5"].includes(value), "Choose a score from 1 to 5.").transform((value) => (value === "" ? null : Number(value)));
+
+export const supplierScorecardSchema = z.object({
+  supplierId: z.string().trim().min(1),
+  grossMargin: scoreValue,
+  moq: scoreValue,
+  feedAvailability: scoreValue,
+  deliveryToSouthAfrica: scoreValue,
+  warrantyRma: scoreValue,
+  certifications: scoreValue,
+  resellerProtection: scoreValue,
+  productUniqueness: scoreValue,
+  localCompetition: scoreValue,
+  notes: z.string().trim().max(1000).optional().default(""),
+});
+
 export const productSchema = z.object({
   sku: requiredText(60, "SKU"),
   name: requiredText(160, "Product name"),
@@ -332,6 +348,7 @@ export type CampaignInput = z.infer<typeof campaignSchema>;
 export type TemplateInput = z.infer<typeof templateSchema>;
 export type ProductInput = z.infer<typeof productSchema>;
 export type SupplierInput = z.infer<typeof supplierSchema>;
+export type SupplierScorecardInput = z.infer<typeof supplierScorecardSchema>;
 export type SuppressionInput = z.infer<typeof suppressionSchema>;
 
 export function fieldErrors(error: z.ZodError): Record<string, string> {

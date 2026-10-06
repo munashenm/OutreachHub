@@ -4,6 +4,7 @@ import { AppError } from "../lib/errors";
 import { acceptProductImage, newProductDecision, seoFromProduct } from "../lib/automation";
 import { matchStoreProduct, skuKey } from "../lib/catalogue-reconcile";
 import { assertPublicHttpsUrl, markedUpCents, priceAllowedByMargin, stockLeft, storePushErrorMessage } from "../lib/stock";
+import { classFromScorecard, SCORECARD_FIELD_SELECT } from "../lib/supplier-scorecard";
 import {
   STOCK_PUSH_BATCH,
   STOCK_PUSH_BATCH_DELAY_MS,
@@ -710,7 +711,7 @@ async function lowestCostByProduct(workspaceId: string, productIds: string[]) {
       stockKnown: true,
       updatedAt: true,
       leadTimeDays: true,
-      supplier: { select: { preference: true, leadTimeDays: true, priceSyncIntervalMinutes: true } },
+      supplier: { select: { preference: true, leadTimeDays: true, priceSyncIntervalMinutes: true, scorecard: { select: SCORECARD_FIELD_SELECT } } },
     },
   });
   const now = new Date();
@@ -731,6 +732,7 @@ async function lowestCostByProduct(workspaceId: string, productIds: string[]) {
       preference: row.supplier.preference,
       leadTimeDays: row.leadTimeDays ?? row.supplier.leadTimeDays,
       priceFreshMs: row.supplier.priceSyncIntervalMinutes * 60 * 1000,
+      supplierClass: classFromScorecard(row.supplier.scorecard),
     })), 1, now);
     if (chosen?.costCents != null) costs.set(productId, chosen.costCents);
   }
@@ -853,7 +855,7 @@ async function applyFeed(
       where: { workspaceId: actor.workspaceId, productId },
       include: {
         supplier: {
-          select: { markupPercent: true, preference: true, leadTimeDays: true, stockSyncIntervalMinutes: true, priceSyncIntervalMinutes: true },
+          select: { markupPercent: true, preference: true, leadTimeDays: true, stockSyncIntervalMinutes: true, priceSyncIntervalMinutes: true, scorecard: { select: SCORECARD_FIELD_SELECT } },
         },
       },
     });
@@ -869,6 +871,7 @@ async function applyFeed(
         preference: row.supplier.preference,
         leadTimeDays: row.leadTimeDays ?? row.supplier.leadTimeDays,
         priceFreshMs: row.supplier.stockSyncIntervalMinutes * 60 * 1000,
+        supplierClass: classFromScorecard(row.supplier.scorecard),
       })), now);
       if (chosenQty !== null) data.stockOnHand = chosenQty;
     }
@@ -883,6 +886,7 @@ async function applyFeed(
         preference: row.supplier.preference,
         leadTimeDays: row.leadTimeDays ?? row.supplier.leadTimeDays,
         priceFreshMs: row.supplier.priceSyncIntervalMinutes * 60 * 1000,
+        supplierClass: classFromScorecard(row.supplier.scorecard),
       })), 1, now);
       const source = chosen ? rows.find((row) => row.supplierId === chosen.supplierId) : null;
       const sell = chosen?.costCents != null && source ? markedUpCents(chosen.costCents, source.supplier.markupPercent) : null;

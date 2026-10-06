@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { SupplierFeedForm } from "@/components/supplier-feed-form";
 import { SupplierManualImport } from "@/components/supplier-manual-import";
+import { SupplierScorecardForm } from "@/components/supplier-scorecard-form";
 import { SupplierTabs } from "@/components/supplier-tabs";
 import { PageHeader, Panel } from "@/components/ui";
 import { distributorKey } from "@/lib/distributors";
@@ -9,6 +10,7 @@ import { formatDateTime } from "@/lib/format";
 import { formatCents } from "@/lib/quote";
 import { readFieldMapping } from "@/lib/supplier-connector";
 import { IMPORT_COLUMNS } from "@/lib/supplier-file";
+import { scoresFrom } from "@/lib/supplier-scorecard";
 import { requireSession } from "@/services/auth-service";
 import { getSupplier } from "@/services/supplier-service";
 
@@ -87,6 +89,17 @@ export default async function SupplierDetailPage({ params }: { params: Promise<{
                 </tbody>
               </table>
             )}
+          </Panel>
+        }
+        scorecard={
+          <Panel className="p-5">
+            <h2 className="font-semibold">Scorecard</h2>
+            <p className="mt-1 mb-4 text-sm text-muted">Score each point from 1 to 5. Five is strongest for Urban Focus. Preferred, Backup, Project Only, and Reject are calculated from the scores.</p>
+            <SupplierScorecardForm
+              supplierId={supplier.id}
+              notes={supplier.scorecard?.notes ?? ""}
+              scores={scoresFrom(supplier.scorecard)}
+            />
           </Panel>
         }
         history={

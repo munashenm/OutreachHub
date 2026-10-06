@@ -18,6 +18,7 @@ import {
 } from "../lib/document-analysis";
 import { readDocumentFile, renderScannedPdfPages } from "../lib/document-files";
 import { readImageText } from "../lib/document-vision";
+import { classFromScorecard, SCORECARD_FIELD_SELECT } from "../lib/supplier-scorecard";
 import { AppError } from "../lib/errors";
 import type { Actor } from "./types";
 import { chooseSupplierOffer } from "../lib/supplier-connector";
@@ -206,7 +207,7 @@ export async function generateQuoteFromAnalysis(actor: Actor, rfqId: string) {
   if (!workspace) throw new AppError("Workspace not found.", 404, "NOT_FOUND");
   const offers = await db.supplierPrice.findMany({
     where: { workspaceId: actor.workspaceId, productId: { in: matches.map((match) => match.productId || "") }, costKnown: true },
-    include: { supplier: { select: { markupPercent: true, preference: true, leadTimeDays: true, priceSyncIntervalMinutes: true } } },
+    include: { supplier: { select: { markupPercent: true, preference: true, leadTimeDays: true, priceSyncIntervalMinutes: true, scorecard: { select: SCORECARD_FIELD_SELECT } } } },
   });
   let quote = await db.quote.findFirst({ where: { workspaceId: actor.workspaceId, rfqId, status: "DRAFT" } });
   if (!quote) quote = await db.quote.create({ data: { workspaceId: actor.workspaceId, rfqId } });
@@ -224,6 +225,7 @@ export async function generateQuoteFromAnalysis(actor: Actor, rfqId: string) {
       preference: row.supplier.preference,
       leadTimeDays: row.leadTimeDays ?? row.supplier.leadTimeDays,
       priceFreshMs: row.supplier.priceSyncIntervalMinutes * 60 * 1000,
+      supplierClass: classFromScorecard(row.supplier.scorecard),
     })), 1, now);
     const item = rows.flatMap((entry) => entry.record.items).find((entry) => entry.lineNumber === match.lineNumber);
     if (item?.quantity == null || item.quantity <= 0) throw new AppError(`Line ${match.lineNumber || item?.description || "requested"} has no quantity in the document.`);

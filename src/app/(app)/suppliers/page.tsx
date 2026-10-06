@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { addSouthAfricanDistributorsAction } from "@/actions/supplier-actions";
-import { EmptyState, PageHeader, Panel, buttonPrimary, buttonSecondary } from "@/components/ui";
+import { Badge, EmptyState, PageHeader, Panel, buttonPrimary, buttonSecondary } from "@/components/ui";
 import { missingDistributors } from "@/lib/distributors";
+import { SUPPLIER_CLASS_LABELS, SUPPLIER_CLASS_TONE, classifySupplier, scoresFrom } from "@/lib/supplier-scorecard";
 import { requireSession } from "@/services/auth-service";
 import { listSuppliers } from "@/services/supplier-service";
 
@@ -21,17 +22,21 @@ export default async function SuppliersPage() {
           <div className="p-4"><EmptyState title="No suppliers yet" description="Add a supplier, then save a feed address or upload a CSV, XML, or XLSX file." /></div>
         ) : (
           <table className="data-table">
-            <thead><tr><th>Name</th><th>Email</th><th>Country</th><th>Source</th><th>Products</th></tr></thead>
+            <thead><tr><th>Name</th><th>Email</th><th>Country</th><th>Class</th><th>Source</th><th>Products</th></tr></thead>
             <tbody>
-              {suppliers.map((supplier) => (
+              {suppliers.map((supplier) => {
+                const result = classifySupplier(scoresFrom(supplier.scorecard));
+                return (
                 <tr key={supplier.id}>
                   <td><Link className="font-medium hover:underline" href={`/suppliers/${supplier.id}`}>{supplier.name}</Link></td>
                   <td>{supplier.email ?? "—"}</td>
                   <td>{supplier.country || "—"}</td>
+                  <td><Badge tone={SUPPLIER_CLASS_TONE[result.supplierClass]}>{SUPPLIER_CLASS_LABELS[result.supplierClass]}</Badge></td>
                   <td>{supplier.feedEnabled ? (supplier.stockFeedUrl ? supplier.feedType : "Manual file") : "Not active"}</td>
                   <td>{supplier._count.feedItems}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}

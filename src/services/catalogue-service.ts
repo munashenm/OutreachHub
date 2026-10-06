@@ -15,6 +15,7 @@ import {
   type CatalogueStats,
 } from "../lib/catalogue-reconcile";
 import { markedUpCents } from "../lib/stock";
+import { classFromScorecard, SCORECARD_FIELD_SELECT } from "../lib/supplier-scorecard";
 import { chooseSupplierOffer, selectedSupplierStock, type SupplierChoice } from "../lib/supplier-connector";
 import { verifiedProductImageUrls } from "./external-sourcing-service";
 import { loadStoreProvider } from "./store/load";
@@ -490,7 +491,7 @@ async function loadCatalogueComparisons(workspaceId: string, scanId: string): Pr
         updatedAt: true,
         leadTimeDays: true,
         imageUrls: true,
-        supplier: { select: { name: true, preference: true, leadTimeDays: true, priceSyncIntervalMinutes: true, markupPercent: true } },
+        supplier: { select: { name: true, preference: true, leadTimeDays: true, priceSyncIntervalMinutes: true, markupPercent: true, scorecard: { select: SCORECARD_FIELD_SELECT } } },
       },
     }),
     db.supplierFeedItem.findMany({
@@ -507,7 +508,7 @@ async function loadCatalogueComparisons(workspaceId: string, scanId: string): Pr
         updatedAt: true,
         leadTimeDays: true,
         imageUrls: true,
-        supplier: { select: { name: true, preference: true, leadTimeDays: true, priceSyncIntervalMinutes: true, markupPercent: true } },
+        supplier: { select: { name: true, preference: true, leadTimeDays: true, priceSyncIntervalMinutes: true, markupPercent: true, scorecard: { select: SCORECARD_FIELD_SELECT } } },
       },
     }),
   ]);
@@ -557,7 +558,7 @@ function pricedChoice(row: {
   updatedAt: Date;
   leadTimeDays: number | null;
   imageUrls: string[];
-  supplier: { name: string; preference: number; leadTimeDays: number | null; priceSyncIntervalMinutes: number; markupPercent: number };
+  supplier: { name: string; preference: number; leadTimeDays: number | null; priceSyncIntervalMinutes: number; markupPercent: number; scorecard: Parameters<typeof classFromScorecard>[0] };
 }): PricedChoice {
   return {
     supplierId: row.supplierId,
@@ -569,6 +570,7 @@ function pricedChoice(row: {
     preference: row.supplier.preference,
     leadTimeDays: row.leadTimeDays ?? row.supplier.leadTimeDays,
     priceFreshMs: row.supplier.priceSyncIntervalMinutes * 60 * 1000,
+    supplierClass: classFromScorecard(row.supplier.scorecard),
     name: row.supplier.name,
     markupPercent: row.supplier.markupPercent,
     imageUrls: row.imageUrls,

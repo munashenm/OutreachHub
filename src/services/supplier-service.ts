@@ -1,9 +1,10 @@
 import { getDb } from "../lib/db";
 import { missingDistributors } from "../lib/distributors";
 import { AppError } from "../lib/errors";
+import { classFromScorecard, classifySupplier, SCORECARD_FIELD_SELECT, SUPPLIER_CLASS_LABELS, type SupplierScores } from "../lib/supplier-scorecard";
 import { chooseSupplierOffer, matchCatalogueOffer, offersFromCsvRecords, type SupplierOffer } from "../lib/supplier-connector";
 import { planSupplierPriceImport } from "../lib/supplier-feed";
-import type { SupplierInput } from "../lib/validators";
+import type { SupplierInput, SupplierScorecardInput } from "../lib/validators";
 import { recordActivity } from "./activity-service";
 import { saveSupplierOffers } from "./stock-sync-service";
 import type { Actor } from "./types";
@@ -11,7 +12,7 @@ import type { Actor } from "./types";
 export async function listSuppliers(workspaceId: string) {
   return getDb().supplier.findMany({
     where: { workspaceId },
-    include: { _count: { select: { prices: true, feedItems: true } } },
+    include: { _count: { select: { prices: true, feedItems: true } }, scorecard: true },
     orderBy: { name: "asc" },
   });
 }
@@ -27,6 +28,7 @@ export async function getSupplier(workspaceId: string, id: string) {
       },
       feedItems: { orderBy: { updatedAt: "desc" }, take: 100 },
       imports: { orderBy: { uploadedAt: "desc" }, take: 30 },
+      scorecard: true,
       _count: { select: { feedItems: true } },
     },
   });
@@ -80,7 +82,7 @@ export async function lowestCostsByProduct(workspaceId: string, productIds: stri
       stockKnown: true,
       updatedAt: true,
       leadTimeDays: true,
-      supplier: { select: { preference: true, leadTimeDays: true, priceSyncIntervalMinutes: true } },
+      supplier: { select: { preference: true, leadTimeDays: true, priceSyncIntervalMinutes: true, scorecard: { select: SCORECARD_FIELD_SELECT } } },
     },
   });
   const costs = new Map<string, number>();
@@ -102,6 +104,7 @@ export async function lowestCostsByProduct(workspaceId: string, productIds: stri
       preference: row.supplier.preference,
       leadTimeDays: row.leadTimeDays ?? row.supplier.leadTimeDays,
       priceFreshMs: row.supplier.priceSyncIntervalMinutes * 60 * 1000,
+      supplierClass: classFromScorecard(row.supplier.scorecard),
     })), 1, now);
     if (chosen?.costCents != null) costs.set(productId, chosen.costCents);
   }
@@ -172,4 +175,30 @@ export async function importSupplierPrices(actor: Actor, supplierId: string, rec
     });
   }
   return { updated: readyOffers.length, rejected };
+}
+
+export async function saveSupplierScorecard(actor: Actor, input: SupplierScorecardInput) {
+  const supplier = await getDb().supplier.findFirst({
+    where: { id: input.supplierId, workspaceId: actor.workspaceId },
+    select: { id: true, name: true },
+  });
+  if (!supplier) throw new AppError("Supplier not found.", 404, "NOT_FOUND");
+  const scores: SupplierScores = {
+    grossMargin: input.grossMargin,
+    moq: input.moq,
+    feedAvailability: input.feedAvailability,
+    deliveryToSouthAfrica: input.deliveryToSouthAfrica,
+    warrantyRma: input.warrantyRma,
+    certifications: input.certifications,
+    resellerProtection: input.resellerProtection,
+    productUniqueness: input.productUniqueness,
+    localCompetition: input.localCompetition,
+  };
+  await getDb().supplierScorecard.upsert({
+    where: { supplierId: supplier.id },
+    create: { workspaceId: actor.workspaceId, supplierId: supplier.id, notes: input.notes, ...scores },
+    update: { notes: input.notes, ...scores },
+  });
+  const result = classifySupplier(scores);
+  return `${supplier.name} is ${SUPPLIER_CLASS_LABELS[result.supplierClass]}.`;
 }

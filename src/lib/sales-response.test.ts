@@ -83,7 +83,27 @@ test("asks a clarification when confidence is low and opens sourcing when nothin
   assert.equal(missing.action, "EXTERNAL_TASK");
 });
 
-test("offers a verified alternative when the exact product is out of stock", () => {
+test("offers a verified alternative only after the requested product is out of stock", () => {
+  const alternative = {
+    productId: "p2",
+    name: "ThinkPad E16",
+    sku: "LNV-E16",
+    method: "FUZZY" as const,
+    similarity: 0.6,
+    stockQty: 3,
+    unitPriceCents: 1200000,
+    marginPercent: 20,
+  };
+  const beforeStock = decideSalesResponse({
+    vague: false,
+    requestedExact: true,
+    requestedQuantity: 2,
+    marginAllowed: true,
+    autoSendAllowed: false,
+    matches: [alternative],
+  });
+  assert.equal(beforeStock.action, "EXTERNAL_TASK");
+  assert.equal(beforeStock.message.includes("E16"), false);
   const decision = decideSalesResponse({
     vague: false,
     requestedExact: true,
@@ -91,21 +111,22 @@ test("offers a verified alternative when the exact product is out of stock", () 
     marginAllowed: true,
     autoSendAllowed: false,
     matches: [{
-      productId: "p2",
-      name: "ThinkPad E16",
-      sku: "LNV-E16",
-      method: "FUZZY",
-      similarity: 0.6,
-      stockQty: 3,
-      unitPriceCents: 1200000,
+      productId: "p1",
+      name: "ThinkPad E14",
+      sku: "LNV-E14",
+      method: "EXACT",
+      similarity: 1,
+      stockQty: 0,
+      unitPriceCents: 1000000,
       marginPercent: 20,
-    }],
+    }, alternative],
   });
   assert.equal(decision.action, "ALTERNATIVES");
   assert.match(decision.message, /ZAR 12000.00/);
   assert.match(decision.message, /excluding VAT/);
   assert.match(decision.message, /3 available/);
   assert.equal(decision.message.includes("lead time"), false);
+  assert.equal(decision.matches.some((match) => match.sku === "LNV-E14"), false);
 });
 
 test("follow-up waits, sends once, and stops when the customer replies, rejects, or orders", () => {
@@ -160,7 +181,7 @@ test("a website ThinkPad without a supplier cost is named and not priced", () =>
   const requirement = emptyRequirement("2 x Lenovo ThinkPad E14");
   requirement.model = "ThinkPad E14";
   requirement.productType = "Laptop";
-  const matches = rankProductMatches(requirement, [candidate({
+  const different = rankProductMatches(requirement, [candidate({
     name: "Lenovo ThinkPad T14 Gen 6 Intel Core Ultra 7 16GB 512GB Win 11 Pro",
     sku: "21QC000YZA",
     model: "21QC000YZA",
@@ -168,10 +189,20 @@ test("a website ThinkPad without a supplier cost is named and not priced", () =>
     stockKnown: true,
     costExVatCents: null,
   })]);
+  assert.equal(unpricedCatalogueNote(requirement, different), "");
+  const matches = rankProductMatches(requirement, [candidate({
+    name: "Lenovo ThinkPad E14 Gen 7",
+    sku: "LNV-E14",
+    model: "ThinkPad E14",
+    stockQty: 2,
+    stockKnown: true,
+    costExVatCents: null,
+  })]);
   const note = unpricedCatalogueNote(requirement, matches);
-  assert.match(note, /21QC000YZA/);
+  assert.match(note, /ThinkPad E14/);
   assert.match(note, /No supplier cost is on file/);
   assert.equal(note.includes("ZAR"), false);
+  assert.equal(note.includes("21QC000YZA"), false);
 });
 
 test("an exact website specification is named ahead of a higher one", () => {

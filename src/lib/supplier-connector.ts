@@ -1,4 +1,5 @@
 import { parseCsv, rowsToRecords } from "./csv";
+import { supplierClassRank, type SupplierClass } from "./supplier-scorecard";
 import { parseMoneyToCents } from "./quote";
 import { assertPublicHttpsUrl } from "./stock";
 
@@ -111,17 +112,21 @@ export type SupplierChoice = {
   preference: number;
   leadTimeDays: number | null;
   priceFreshMs: number;
+  supplierClass?: SupplierClass;
 };
 
 export function chooseSupplierOffer(offers: SupplierChoice[], requestedQty: number, now: Date) {
   const quantity = Math.max(1, Math.ceil(requestedQty) || 1);
   const eligible = offers.filter((offer) => {
+    if (offer.supplierClass === "REJECT") return false;
     if (now.getTime() - offer.updatedAt.getTime() > offer.priceFreshMs) return false;
     if (!offer.stockKnown || offer.stockQty == null || offer.stockQty < quantity) return false;
     if (!offer.costKnown || offer.costCents == null || offer.costCents <= 0) return false;
     return true;
   });
   eligible.sort((left, right) => {
+    const rank = supplierClassRank(left.supplierClass) - supplierClassRank(right.supplierClass);
+    if (rank !== 0) return rank;
     const cost = (left.costCents ?? 0) - (right.costCents ?? 0);
     if (cost !== 0) return cost;
     if (left.preference !== right.preference) return right.preference - left.preference;
@@ -137,11 +142,14 @@ export function selectedSupplierStock(offers: SupplierChoice[], now: Date) {
   const chosen = chooseSupplierOffer(offers, 1, now);
   if (chosen?.stockQty != null) return Math.max(0, Math.floor(chosen.stockQty));
   const fresh = offers.filter((offer) => {
+    if (offer.supplierClass === "REJECT") return false;
     if (now.getTime() - offer.updatedAt.getTime() > offer.priceFreshMs) return false;
     return offer.stockKnown && offer.stockQty != null;
   });
   if (fresh.length === 0) return null;
   fresh.sort((left, right) => {
+    const rank = supplierClassRank(left.supplierClass) - supplierClassRank(right.supplierClass);
+    if (rank !== 0) return rank;
     const leftQty = Math.max(0, Math.floor(left.stockQty ?? 0));
     const rightQty = Math.max(0, Math.floor(right.stockQty ?? 0));
     if ((leftQty > 0) !== (rightQty > 0)) return leftQty > 0 ? -1 : 1;
