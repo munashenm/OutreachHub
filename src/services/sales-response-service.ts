@@ -16,6 +16,7 @@ import { equivalentsRejected } from "../lib/rfq-match";
 import type { ProductRequirement, SourcingCandidate } from "../lib/sourcing";
 import { formatQuoteDate, lineTotalCents } from "../lib/quote";
 import { displayedQuoteNumber, quotationEmailSubject } from "../lib/quotation-document";
+import { autoRfqRepliesEnabled } from "../lib/inbound-response";
 import { sendCustomerResponse } from "./reply-service";
 
 export { unpricedCatalogueNote };
@@ -154,6 +155,7 @@ export async function processQuoteFollowUps() {
       continue;
     }
     if (action !== "send" || !quote.rfq.sourceMessage.fromEmail || quote.number == null || quote.issuedAt == null) continue;
+    if (!autoRfqRepliesEnabled()) continue;
     const quoteNumber = displayedQuoteNumber(quote.number, quote.issuedAt, quote.pdfFilename);
     const validUntil = quote.validUntil ? formatQuoteDate(quote.validUntil) : "";
     await sendCustomerResponse(
