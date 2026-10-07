@@ -74,20 +74,78 @@ export function isQuotationRequest(kind: InboundKind) {
   return COMMERCIAL.has(kind);
 }
 
+export function currentCustomerText(body: string) {
+  const normalized = body.replace(/\r\n/g, "\n");
+  const cutters = [
+    /\nOn [^\n]{0,300} wrote:\s*/i,
+    /\bOn [^\n]{0,300} wrote:\s*/i,
+    /(?:^|\n)_{8,}\s*(?:\n|$)/,
+    /(?:^|\n)-{2,}\s*Original Message\s*-{2,}/i,
+    /(?:^|\n)-{5,}\s*Forwarded message\s*-{5,}/i,
+  ];
+  let end = normalized.length;
+  for (const pattern of cutters) {
+    const match = pattern.exec(normalized);
+    if (match && match.index < end) end = match.index;
+  }
+  const lines = normalized.slice(0, end).split("\n");
+  const kept: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (line.trim().startsWith(">")) continue;
+    if (kept.some((keptLine) => keptLine.trim()) && quotedHeaderAt(lines, index)) break;
+    kept.push(line);
+  }
+  return kept.join("\n").trim();
+}
+
+function quotedHeaderAt(lines: string[], index: number) {
+  const window = lines.slice(index, index + 6).map((line) => line.trim());
+  if (!/^from:\s+\S/i.test(window[0] ?? "")) return false;
+  return window.slice(1).some((line) => /^(sent|date|to|subject|cc):\s+/i.test(line));
+}
+
+function subjectForIntent(subject: string) {
+  if (/^\s*(re|fw|fwd)\s*:/i.test(subject)) return "";
+  return subject.trim();
+}
+
+function hasBuyingIntent(text: string) {
+  if (isSupplierAnnouncement(text)) return false;
+  return [
+    /\b(?:please|kindly)\s+quote\b/i,
+    /\bquote\s+(?:on|for|according to)\b/i,
+    /\b(?:please|kindly)\s+(?:send|provide|give|forward)\b[\s\S]{0,60}\b(?:quotation|quote|pricing|price)\b/i,
+    /\b(?:can|could)\s+you\s+(?:please\s+)?(?:provide|send|give|quote|confirm)\b[\s\S]{0,60}\b(?:pricing|price|quotation|quote|availability)\b/i,
+    /\b(?:please|kindly)\s+confirm\b[\s\S]{0,60}\b(?:price|pricing|availability)\b/i,
+    /\bprovide\s+pricing\s+for\b/i,
+  ].some((pattern) => pattern.test(text));
+}
+
+function isSupplierAnnouncement(text: string) {
+  return /\b(?:our|latest|updated)\b[\s\S]{0,50}\b(?:price list|dealer pricing|catalogue|catalog)\b/i.test(text)
+    || /\b(?:here is|attached is|please see)\b[\s\S]{0,60}\b(?:price list|dealer pricing|pricing|stock availability|catalogue|catalog)\b/i.test(text);
+}
+
 export function classifyInbound(input: { subject: string; body: string; campaignReply: boolean }): InboundKind {
   if (input.campaignReply) return "CAMPAIGN_REPLY";
-  const text = `${input.subject}\n${input.body}`;
-  if (isBulkNotice(input.subject, input.body)) return "OTHER";
-  const reply = classifyCustomerReply(text);
+  const body = currentCustomerText(input.body);
+  const text = `${subjectForIntent(input.subject)}\n${body}`.trim();
+  if (isBulkNotice(input.subject, body)) return "OTHER";
+  const reply = classifyCustomerReply(body);
   if (reply === "QUOTE_ACCEPTED") return "QUOTE_ACCEPTED";
   if (reply === "PURCHASE_ORDER") return "ORDER_OR_PO";
   if (reply === "PRICE_NEGOTIATION") return "PRICE_NEGOTIATION";
   if (reply === "NOT_INTERESTED") return "OTHER";
-  if (/\b(request for quotation|quotation|please quote|rfq|quote on|kindly quote)\b/i.test(text)) return "RFQ";
-  if (/\b(in stock|availability|do you have|stock check)\b/i.test(text)) return "STOCK_ENQUIRY";
-  if (/\b(price|pricing|how much|costing)\b/i.test(text)) return "PRICE_ENQUIRY";
-  if (/\b(enquiry|inquire|information on)\b/i.test(text)) return "GENERAL_ENQUIRY";
-  return "OTHER";
+  if (!hasBuyingIntent(text)) {
+    if (/\b(enquiry|inquire|information on)\b/i.test(text)) return "GENERAL_ENQUIRY";
+    return "OTHER";
+  }
+  if (/\b(please quote|kindly quote|quotation|quote on|quote for|quote according)\b/i.test(text)) return "RFQ";
+  if (/\b(pricing|price)\b/i.test(text) && /\bavailability\b/i.test(text)) return "RFQ";
+  if (/\b(pricing|price)\b/i.test(text)) return "PRICE_ENQUIRY";
+  if (/\bavailability\b/i.test(text)) return "STOCK_ENQUIRY";
+  return "RFQ";
 }
 
 function isBulkNotice(subject: string, body: string) {
