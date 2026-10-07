@@ -150,7 +150,8 @@ export function extractProductRequirements(body: string): ProductRequirement[] {
     }
     if (isRequestLine(line)) {
       const continues = current.length > 0 && /\b((?:please\s+)?recommend|suitable options?|different price levels?)\b/i.test(line) && !/\b(?:quote|need|pricing|rfq)\b/i.test(line);
-      if (continues) {
+      const specification = current.length > 0 && isSpecificationContinuation(line);
+      if (continues || specification) {
         current.push(line);
         continue;
       }
@@ -252,7 +253,7 @@ export function landedCostCents(costExVatCents: number, allowances: { shippingCe
 }
 
 export function compareRequirement(requirement: ProductRequirement, candidate: SourcingCandidate): MatchGrade {
-  const offered = specsFromText(`${candidate.name} ${candidate.model} ${candidate.specifications}`);
+  const offered = specsForCandidate(candidate);
   const identityRequested = Boolean(requirement.sku || requirement.mpn || requirement.model);
   const identity = identityMatches(requirement, candidate);
   if (identityRequested && !identity && !hasComparableSpecs(requirement)) return "DOES_NOT_MEET";
@@ -411,7 +412,7 @@ function priceLevels(candidates: SourcingCandidate[], count: number) {
 }
 
 export function candidateScore(requirement: ProductRequirement, candidate: SourcingCandidate) {
-  const offered = specsFromText(`${candidate.name} ${candidate.model} ${candidate.specifications}`);
+  const offered = specsForCandidate(candidate);
   let points = 0;
   const award = (result: string, meet: number, exceed: number) => {
     if (result === "MEETS") points += meet;
@@ -501,10 +502,17 @@ function suitableAlternative(requirement: ProductRequirement, candidate: Sourcin
 }
 
 function recommendationEligible(requirement: ProductRequirement, candidate: SourcingCandidate) {
-  const blob = `${candidate.name} ${candidate.brand} ${candidate.model} ${candidate.specifications}`;
+  const identity = `${candidate.name} ${candidate.brand} ${candidate.model}`;
   const wantsLaptop = requirement.productType === "Laptop" || /\blaptops?|notebooks?\b/i.test(requirement.requestedText);
-  if (wantsLaptop && !/\blaptops?|notebooks?|thinkpad|probook|elitebook|latitude\b/i.test(blob)) return false;
-  if (/\b(professional|programming|business)\b/i.test(requirement.requestedText) && !/\b(thinkpad|probook|elitebook|latitude|expertbook|precision|zbook)\b/i.test(blob)) return false;
+  const businessLine = /\b(thinkpad|probook|elitebook|latitude|expertbook|precision|zbook)\b/i.test(identity);
+  if (wantsLaptop && !/\blaptops?|notebooks?\b/i.test(identity) && !businessLine) return false;
+  const professional = /\b(professional|programming|business)\b/i.test(requirement.requestedText);
+  if (professional && !businessLine) return false;
+  if (professional) {
+    const floor = requirement.processor || "Core i5|Core Ultra 5|Ryzen 5";
+    const cpu = compareProcessor(floor, specsForCandidate(candidate).processor);
+    if (cpu !== "MEETS" && cpu !== "EXCEEDS") return false;
+  }
   const probe = { ...requirement, model: "", sku: "", mpn: "" };
   if (hasComparableSpecs(probe)) {
     const grade = compareRequirement(probe, candidate);
@@ -519,10 +527,7 @@ function quoteGrade(requirement: ProductRequirement, candidate: SourcingCandidat
     return grade === "DOES_NOT_MEET" || grade === "PARTIAL" ? "EXACT" : grade;
   }
   const probe = { ...requirement, model: "", sku: "", mpn: "" };
-  if (hasComparableSpecs(probe)) {
-    const grade = compareRequirement(probe, candidate);
-    if (grade === "EXACT" || grade === "MEETS_REQUIREMENT" || grade === "EXCEEDS_REQUIREMENT") return grade;
-  }
+  if (hasComparableSpecs(probe)) return compareRequirement(probe, candidate);
   return "MEETS_REQUIREMENT";
 }
 
@@ -650,6 +655,12 @@ function isRequestLine(line: string) {
   return (/\b(?:quote|need|pricing|rfq)\b/i.test(line) && hasQuantity(line)) || /^\s*\d+\s*[x×]\b/i.test(line);
 }
 
+function isSpecificationContinuation(line: string) {
+  if (/\b(?:quote|need|pricing|rfq)\b/i.test(line) && hasQuantity(line)) return false;
+  if (/^\s*\d+\s*[x×]\b/i.test(line)) return false;
+  return /\b(or equivalent|meet or exceed|core\s+i[3579]|core\s+ultra|core\s*-?\s*u\s*[3579]|ultra\s+[3579]|ryzen\s+[3579]|\d+\s*gb|windows\s*11|ssd|nvme)\b/i.test(line);
+}
+
 function hasQuantity(line: string) {
   const stripped = stripModelTokens(stripSpecNumbers(line));
   return /\b\d+\b/.test(stripped) || /\b(one|two|three|four|five|six|seven|eight|nine|ten|twenty)\b/i.test(line);
@@ -774,16 +785,33 @@ function identityMatches(requirement: ProductRequirement, candidate: SourcingCan
   return offered.includes(wanted);
 }
 
+function specsForCandidate(candidate: { name: string; model: string; specifications: string }) {
+  const offered = specsFromText(`${candidate.name} ${candidate.model} ${candidate.specifications}`);
+  const named = parseProcessor(`${candidate.name} ${candidate.model}`).split("|").find(Boolean) ?? "";
+  if (named) offered.processor = named;
+  return offered;
+}
+
 function parseProcessor(text: string) {
-  const classes: string[] = [];
-  const add = (label: string) => {
-    if (!classes.includes(label)) classes.push(label);
+  const found: Array<{ index: number; label: string }> = [];
+  const take = (pattern: RegExp, labelFor: (match: RegExpMatchArray) => string) => {
+    for (const match of text.matchAll(pattern)) {
+      if (match.index == null) continue;
+      found.push({ index: match.index, label: labelFor(match) });
+    }
   };
-  for (const match of text.matchAll(/\bcore\s+i([3579])\b/gi)) add(`Core i${match[1]}`);
-  for (const match of text.matchAll(/\bultra\s+([3579])\b/gi)) add(`Core Ultra ${match[1]}`);
-  for (const match of text.matchAll(/\bcore\s+([3579])\b/gi)) add(`Core Ultra ${match[1]}`);
-  for (const match of text.matchAll(/\bryzen\s+([3579])\b/gi)) add(`Ryzen ${match[1]}`);
-  return classes.join("|");
+  take(/\bcore\s+i([3579])\b/gi, (match) => `Core i${match[1]}`);
+  take(/\bultra\s+([3579])\b/gi, (match) => `Core Ultra ${match[1]}`);
+  take(/\bcore\s*-?\s*u\s*([3579])\b/gi, (match) => `Core Ultra ${match[1]}`);
+  take(/\bcore\s+([3579])\b/gi, (match) => `Core Ultra ${match[1]}`);
+  take(/\bryzen\s+([3579])\b/gi, (match) => `Ryzen ${match[1]}`);
+  take(/\b(celeron|pentium|atom)\b/gi, (match) => `${match[1][0]?.toUpperCase() ?? ""}${match[1].slice(1).toLowerCase()}`);
+  take(/\bn(95|97|100|150|200)\b/gi, (match) => `N${match[1]}`);
+  const labels: string[] = [];
+  for (const item of found.sort((left, right) => left.index - right.index)) {
+    if (!labels.includes(item.label)) labels.push(item.label);
+  }
+  return labels.join("|");
 }
 
 function compareProcessor(required: string, offered: string): "MEETS" | "EXCEEDS" | "MISS" | "FAIL" | "SKIP" {
