@@ -10,6 +10,7 @@ import {
   factualReply,
   groundAiRfqExtraction,
   imagesFromProductPage,
+  isQuotationRequest,
   matchRfqLine,
   mergeRfqExtraction,
   PUBLIC_PRICE_NOTE,
@@ -41,6 +42,40 @@ test("classifies a quotation request and ignores an outbound campaign reply", ()
   assert.equal(classifyInbound({ subject: "Your transaction history", body: "Prices changed. Unsubscribe from these emails.", campaignReply: false }), "OTHER");
   assert.equal(classifyCustomerReply("We accept the quotation"), "QUOTE_ACCEPTED");
   assert.equal(classifyCustomerReply("Can you do a better price?"), "PRICE_NEGOTIATION");
+});
+
+test("a customer quotation request is recognised from the current message", () => {
+  const requests = [
+    "Please quote 5 x Lenovo ThinkPad E14 laptops.",
+    "Can you provide pricing for 10 HP ProBooks?",
+    "Please confirm availability and price for SKU ABC123, qty 4.",
+    "Kindly send us a quotation for the attached specification.",
+    "Please quote according to the attached specifications.",
+  ];
+  for (const body of requests) {
+    assert.equal(isQuotationRequest(classifyInbound({ subject: "Hello", body, campaignReply: false })), true, body);
+  }
+  assert.equal(classifyInbound({ subject: "Pricing", body: "Can you provide pricing for 10 HP ProBooks?", campaignReply: false }), "PRICE_ENQUIRY");
+});
+
+test("supplier mail, thanks, and quoted history do not start a quotation", () => {
+  const ignored = [
+    "Our latest dealer pricing is attached.",
+    "Please see stock availability below.",
+    "Thank you.",
+    "Received, thank you.",
+    "Please proceed.",
+    "Can you send your company profile?",
+    "Here is our updated price list.",
+    "Attached is our catalogue and price list.",
+  ];
+  for (const body of ignored) {
+    assert.equal(isQuotationRequest(classifyInbound({ subject: "Re: Quotation", body, campaignReply: false })), false, body);
+  }
+  const quoted = `Thank you.\n\nOn Tue, 7 Oct 2026 at 10:00, Sales <sales@urbanfocus.co.za> wrote:\nPlease quote 5 x Lenovo ThinkPad E14 laptops. The price and availability are confirmed. RFQ attached.`;
+  assert.equal(classifyInbound({ subject: "Re: Request for quotation", body: quoted, campaignReply: false }), "OTHER");
+  const forwarded = "Here is our updated price list.\n\n---------- Forwarded message ---------\nPlease quote 2 x HP ProBook.";
+  assert.equal(isQuotationRequest(classifyInbound({ subject: "FW: price list", body: forwarded, campaignReply: false })), false);
 });
 
 test("keeps a stated quantity phrase and does not invent a prose product", () => {
