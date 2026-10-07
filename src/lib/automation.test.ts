@@ -11,6 +11,7 @@ import {
   groundAiRfqExtraction,
   imagesFromProductPage,
   isQuotationRequest,
+  matchesKnownSupplier,
   matchRfqLine,
   mergeRfqExtraction,
   PUBLIC_PRICE_NOTE,
@@ -76,6 +77,35 @@ test("supplier mail, thanks, and quoted history do not start a quotation", () =>
   assert.equal(classifyInbound({ subject: "Re: Request for quotation", body: quoted, campaignReply: false }), "OTHER");
   const forwarded = "Here is our updated price list.\n\n---------- Forwarded message ---------\nPlease quote 2 x HP ProBook.";
   assert.equal(isQuotationRequest(classifyInbound({ subject: "FW: price list", body: forwarded, campaignReply: false })), false);
+});
+
+test("a known supplier address overrides quotation wording", () => {
+  const supplier = "Buyer@Scoop.co.za";
+  const bodies = [
+    "Can you provide pricing for the following products?",
+    "Please confirm availability and pricing.",
+  ];
+  for (const body of bodies) {
+    const kind = classifyInbound({ subject: "Pricing", body, campaignReply: false });
+    assert.equal(isQuotationRequest(kind), true, body);
+    assert.equal(matchesKnownSupplier(supplier, ["buyer@scoop.co.za"]), true);
+    assert.equal(matchesKnownSupplier("customer@example.com", ["buyer@scoop.co.za"]), false);
+    assert.equal(matchesKnownSupplier("Buyer <buyer@scoop.co.za>", [supplier]), true);
+  }
+  assert.equal(matchesKnownSupplier(null, ["buyer@scoop.co.za"]), false);
+  assert.equal(matchesKnownSupplier("buyer@scoop.co.za", [null, ""]), false);
+});
+
+test("a fresh purchase order is not a quotation request", () => {
+  const kind = classifyInbound({ subject: "Purchase order", body: "Please find attached our PO.", campaignReply: false });
+  assert.equal(kind, "ORDER_OR_PO");
+  assert.equal(isQuotationRequest(kind), false);
+});
+
+test("please proceed is not a fresh quotation request", () => {
+  const kind = classifyInbound({ subject: "Re: Quotation", body: "Please proceed.", campaignReply: false });
+  assert.equal(kind, "OTHER");
+  assert.equal(isQuotationRequest(kind), false);
 });
 
 test("keeps a stated quantity phrase and does not invent a prose product", () => {

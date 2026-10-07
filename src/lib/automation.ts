@@ -68,10 +68,23 @@ export type LineMatch = {
   reason: string;
 };
 
-const COMMERCIAL = new Set<InboundKind>(["RFQ", "PRICE_ENQUIRY", "STOCK_ENQUIRY", "ORDER_OR_PO"]);
+const COMMERCIAL = new Set<InboundKind>(["RFQ", "PRICE_ENQUIRY", "STOCK_ENQUIRY"]);
 
 export function isQuotationRequest(kind: InboundKind) {
   return COMMERCIAL.has(kind);
+}
+
+export function matchesKnownSupplier(fromEmail: string | null | undefined, supplierEmails: readonly (string | null | undefined)[]) {
+  const from = normalizeEmail(fromEmail);
+  if (!from) return false;
+  return supplierEmails.some((email) => normalizeEmail(email) === from);
+}
+
+function normalizeEmail(value: string | null | undefined) {
+  if (!value) return "";
+  const trimmed = value.trim().toLowerCase();
+  const wrapped = trimmed.match(/<([^>]+)>/)?.[1]?.trim();
+  return wrapped || trimmed;
 }
 
 export function currentCustomerText(body: string) {

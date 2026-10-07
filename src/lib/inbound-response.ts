@@ -1,4 +1,5 @@
-import { ACKNOWLEDGEMENT } from "./automation";
+import { ACKNOWLEDGEMENT, classifyCustomerReply, isQuotationRequest, type InboundKind } from "./automation";
+import { asksToProceed, followUpChangesRequirements } from "./rfq-match";
 import { QUANTITY_CLARIFICATION, SOURCING_REPLY } from "./sourcing";
 
 export const INITIAL_DECISIONS = ["QUOTE_READY", "PRICING_PENDING", "SOURCING_REQUIRED", "NEEDS_CLARIFICATION", "NO_RESPONSE"] as const;
@@ -33,6 +34,29 @@ export function customerResponseAllowed(input: { acknowledgementSent: boolean; d
 }
 
 const NONE: InitialResponse = { decision: "NO_RESPONSE", autoReplyType: "NONE", message: "" };
+
+/** Production default is enabled when AUTO_RFQ_REPLIES_ENABLED is unset. Set it to "false" to stop automatic customer RFQ mail. */
+export function autoRfqRepliesEnabled(env?: { AUTO_RFQ_REPLIES_ENABLED?: string }) {
+  return (env ?? process.env).AUTO_RFQ_REPLIES_ENABLED !== "false";
+}
+
+export function suppressAutomaticReply(response: InitialResponse, enabled: boolean): InitialResponse {
+  if (enabled || response.decision === "NO_RESPONSE" || response.autoReplyType === "NONE") return response;
+  return NONE;
+}
+
+export function threadCustomerAction(input: { kind: InboundKind; quoteSent: boolean; currentText: string }): "quote-reply" | "revise-quotation" | "no-response" {
+  const replyKind = classifyCustomerReply(input.currentText);
+  const specUpdate = followUpChangesRequirements(input.currentText);
+  const handledReply = replyKind === "QUOTE_ACCEPTED" || replyKind === "PURCHASE_ORDER" || replyKind === "NOT_INTERESTED" || replyKind === "PRICE_NEGOTIATION" || replyKind === "DELIVERY_QUESTION" || replyKind === "STOCK_QUESTION" || replyKind === "MORE_INFORMATION" || replyKind === "ALTERNATIVE_REQUEST" || asksToProceed(input.currentText);
+  if (input.quoteSent && !specUpdate && handledReply) return "quote-reply";
+  if (!isQuotationRequest(input.kind)) return "no-response";
+  return "revise-quotation";
+}
+
+export function sendsGenericRfqAcknowledgement(action: "quote-reply" | "revise-quotation" | "no-response" | "supplier-message" | "fresh-quotation") {
+  return action === "fresh-quotation" || action === "revise-quotation";
+}
 
 export function determineInitialResponse(facts: ResponseFacts): InitialResponse {
   if (!facts.notify || !facts.quotationRequest || facts.tenderPackage) return NONE;
@@ -82,16 +106,22 @@ export async function sendResponseOnce(input: {
   send: () => Promise<void>;
   log?: (line: string) => void;
   now?: () => string;
+  repliesEnabled?: boolean;
 }) {
   const log = input.log ?? ((line: string) => console.info(line));
   const now = input.now ?? (() => new Date().toISOString());
   const quoteId = input.quoteId ?? "";
-  log(`[RFQ] messageId=${input.gmailMessageId} decision=${input.response.decision}`);
+  const enabled = input.repliesEnabled ?? autoRfqRepliesEnabled();
+  const response = suppressAutomaticReply(input.response, enabled);
+  if (!enabled && input.response.decision !== "NO_RESPONSE" && input.response.autoReplyType !== "NONE") {
+    log(`[RFQ] messageId=${input.gmailMessageId} automatic replies disabled`);
+  }
+  log(`[RFQ] messageId=${input.gmailMessageId} decision=${response.decision}`);
   const claimed = await claimResponse(input.store, {
     gmailMessageId: input.gmailMessageId,
     threadId: input.threadId,
-    decision: input.response.decision,
-    autoReplyType: input.response.autoReplyType,
+    decision: response.decision,
+    autoReplyType: response.autoReplyType,
     quoteId,
   });
   if (!claimed) {
@@ -99,12 +129,12 @@ export async function sendResponseOnce(input: {
     log(`[RFQ] messageId=${input.gmailMessageId} response blocked: already replied`);
     return { sent: false, blocked: true, finished: existing?.processingStatus === "SENT" || existing?.processingStatus === "SKIPPED" };
   }
-  if (input.response.decision === "NO_RESPONSE" || input.response.autoReplyType === "NONE") {
+  if (response.decision === "NO_RESPONSE" || response.autoReplyType === "NONE") {
     await input.store.save(input.gmailMessageId, "CLAIMED", {
       gmailMessageId: input.gmailMessageId,
       threadId: input.threadId,
       processingStatus: "SKIPPED",
-      decision: input.response.decision,
+      decision: response.decision,
       autoReplyType: "NONE",
       autoReplySentAt: null,
       quoteId,
@@ -120,21 +150,21 @@ export async function sendResponseOnce(input: {
       gmailMessageId: input.gmailMessageId,
       threadId: input.threadId,
       processingStatus: "SENT",
-      decision: input.response.decision,
-      autoReplyType: input.response.autoReplyType,
+      decision: response.decision,
+      autoReplyType: response.autoReplyType,
       autoReplySentAt: sentAt,
       quoteId,
       processedAt: sentAt,
     });
-    log(`[RFQ] messageId=${input.gmailMessageId} response=${input.response.autoReplyType} sent=true`);
+    log(`[RFQ] messageId=${input.gmailMessageId} response=${response.autoReplyType} sent=true`);
     return { sent: true, blocked: false, finished: true };
   } catch (error) {
     await input.store.save(input.gmailMessageId, "CLAIMED", {
       gmailMessageId: input.gmailMessageId,
       threadId: input.threadId,
       processingStatus: "FAILED",
-      decision: input.response.decision,
-      autoReplyType: input.response.autoReplyType,
+      decision: response.decision,
+      autoReplyType: response.autoReplyType,
       autoReplySentAt: null,
       quoteId,
       processedAt: null,

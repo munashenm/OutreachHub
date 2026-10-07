@@ -9,6 +9,7 @@ import {
   factualReply,
   groundAiRfqExtraction,
   isQuotationRequest,
+  matchesKnownSupplier,
   matchRfqLine,
   mergeRfqExtraction,
   priceQuotation,
@@ -30,8 +31,8 @@ import { sourceExternalForRequirements } from "./external-sourcing-service";
 import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp, unpricedCatalogueNote } from "./sales-response-service";
 import { analyseRfqDocuments, analysisTextForRfq, listTenderAnalyses, responseModeForRfq, saveAnalysisMatches } from "./document-analysis-service";
 import { matchRequestedSpecification, UNPRICED_LINE, type AnalysisMatch } from "../lib/document-analysis";
-import { determineInitialResponse, sendResponseOnce, customerResponseAllowed, type InitialResponse, type ProcessingRow, type ProcessingStore, type ResponseFacts } from "../lib/inbound-response";
-import { asksToProceed, followUpChangesRequirements, requestStrictness } from "../lib/rfq-match";
+import { determineInitialResponse, sendResponseOnce, customerResponseAllowed, threadCustomerAction, type InitialResponse, type ProcessingRow, type ProcessingStore, type ResponseFacts } from "../lib/inbound-response";
+import { asksToProceed, requestStrictness } from "../lib/rfq-match";
 import { retryDelayMs } from "../lib/quote-send";
 import { analyzeInboundEmail, parseRfqAnalysis, type RfqAnalysis } from "../lib/ai/rfq-analyzer";
 import { requirementsForSourcing } from "../lib/ai/rfq-requirements";
@@ -122,6 +123,18 @@ async function processInboundMessage(messageId: string) {
   if (!workspace) return "skipped";
   const kind = classifyInbound({ subject: message.subject, body: message.body, campaignReply: Boolean(message.campaignId) });
   await db.message.update({ where: { id: message.id }, data: { category: inboxCategory(kind) } });
+  if (await knownSupplierSender(message.workspaceId, message.fromEmail)) {
+    console.info(`[RFQ] messageId=${message.externalId || message.id} supplier-message`);
+    const delivery = await sendResponseOnce({
+      gmailMessageId: message.externalId || message.id,
+      threadId: message.threadId ?? "",
+      response: { decision: "NO_RESPONSE", autoReplyType: "NONE", message: "" },
+      store: processingStore(message.workspaceId, message.id),
+      send: async () => undefined,
+    });
+    if (!delivery.blocked || delivery.finished) await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
+    return delivery.blocked ? "already-replied" : "supplier-message";
+  }
   const existing = await rfqForThread(message.workspaceId, message.threadId, message.id);
   if (existing && message.threadId && existing.threadId !== message.threadId) {
     await db.rfq.update({ where: { id: existing.id }, data: { threadId: message.threadId } });
@@ -129,15 +142,17 @@ async function processInboundMessage(messageId: string) {
   }
   if (existing) {
     const currentBody = currentCustomerText(message.body);
-    const replyKind = classifyCustomerReply(currentBody);
     const quoteSent = existing.status === "QUOTE_SENT" || existing.status === "SENT" || existing.status === "WON" || existing.quotes.some((quote) => quote.status === "SENT");
-    const specUpdate = followUpChangesRequirements(currentBody);
-    const handledReply = replyKind === "QUOTE_ACCEPTED" || replyKind === "PURCHASE_ORDER" || replyKind === "NOT_INTERESTED" || replyKind === "PRICE_NEGOTIATION" || replyKind === "DELIVERY_QUESTION" || replyKind === "STOCK_QUESTION" || replyKind === "MORE_INFORMATION" || replyKind === "ALTERNATIVE_REQUEST" || asksToProceed(currentBody);
-    if (quoteSent && !specUpdate && handledReply) {
+    const action = threadCustomerAction({
+      kind: classifyInbound({ subject: message.subject, body: currentBody, campaignReply: false }),
+      quoteSent,
+      currentText: currentBody,
+    });
+    if (action === "quote-reply") {
       await handleQuoteReply(message, existing.id);
       return "reply";
     }
-    if (!isQuotationRequest(classifyInbound({ subject: message.subject, body: currentBody, campaignReply: false }))) {
+    if (action === "no-response") {
       const delivery = await sendResponseOnce({
         gmailMessageId: message.externalId || message.id,
         threadId: message.threadId ?? "",
@@ -215,6 +230,15 @@ async function deliverRfqOutcome(
   });
   if (!delivery.blocked || delivery.finished) await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
   return delivery.blocked ? "already-replied" : "rfq";
+}
+
+async function knownSupplierSender(workspaceId: string, fromEmail: string | null) {
+  if (!fromEmail) return false;
+  const suppliers = await getDb().supplier.findMany({
+    where: { workspaceId },
+    select: { email: true },
+  });
+  return matchesKnownSupplier(fromEmail, suppliers.map((supplier) => supplier.email));
 }
 
 async function inboundThreadText(rfq: { workspaceId: string; threadId: string; subject: string; description: string; sourceMessage: { subject: string; body: string; threadId: string | null } | null }) {
