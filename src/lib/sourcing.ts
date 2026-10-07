@@ -300,14 +300,29 @@ export function planSourcing(input: {
     }
     priced.push(...found.options);
   }
-  const catalogueBacked = priced.every((option) => option.sourceKind !== "EXTERNAL_SOURCE");
-  const send = priced.length > 0 && priced.every((option) => option.canSend) && catalogueBacked;
+  const options = collapseIdenticalOptions(priced);
+  const catalogueBacked = options.every((option) => option.sourceKind !== "EXTERNAL_SOURCE");
+  const send = options.length > 0 && options.every((option) => option.canSend) && catalogueBacked;
   return {
     kind: "QUOTE",
     send,
     note: send ? "A catalogue or supplier product meets the request, so the quotation can be sent." : "A sourced quotation is ready for approval.",
-    options: priced.slice(0, 3),
+    options: options.slice(0, 3),
   };
+}
+
+function collapseIdenticalOptions(options: PricedSource[]) {
+  const kept: PricedSource[] = [];
+  for (const option of options) {
+    const existing = kept.find((item) => item.name.toLowerCase() === option.name.toLowerCase() && item.unitPriceCents === option.unitPriceCents);
+    if (!existing) {
+      kept.push(option);
+      continue;
+    }
+    if (option.quantity > existing.quantity) existing.quantity = option.quantity;
+  }
+  if (kept.length === 1) kept[0].role = "Recommended";
+  return kept;
 }
 
 function chooseSources(requirement: ProductRequirement, pools: SourcingPools, now: Date, freshnessMs: number, margins: { minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }) {
@@ -636,7 +651,14 @@ function isRequestLine(line: string) {
 }
 
 function hasQuantity(line: string) {
-  return /\b\d+\b/.test(stripSpecNumbers(line)) || /\b(one|two|three|four|five|six|seven|eight|nine|ten|twenty)\b/i.test(line);
+  const stripped = stripModelTokens(stripSpecNumbers(line));
+  return /\b\d+\b/.test(stripped) || /\b(one|two|three|four|five|six|seven|eight|nine|ten|twenty)\b/i.test(line);
+}
+
+function stripModelTokens(text: string) {
+  return text
+    .replace(/\b(?:thinkpad|latitude|alienware|probook|elitebook|precision|inspiron|xps)\s+[a-z]?\d{2,4}[a-z0-9]*\b/gi, " ")
+    .replace(/\bg\d{1,2}\b/gi, " ");
 }
 
 function requirementFromText(text: string): ProductRequirement {

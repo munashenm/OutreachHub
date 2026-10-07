@@ -345,6 +345,32 @@ function catalogueLaptop(overrides: Partial<SourcingCandidate>) {
   });
 }
 
+test("a subject that names the model is not a second quotation line", () => {
+  const requirements = extractProductRequirements("Quote request HP ProBook 440 G11\nPlease quote 2 x HP ProBook 440 G11.");
+  assert.equal(requirements.length, 1);
+  assert.equal(requirements[0]?.quantity, 2);
+  assert.match(requirements[0]?.model ?? "", /ProBook 440/i);
+  const exact = catalogueLaptop({
+    name: "HP ProBook 440 G11 14\" Core-U5 16GB 512GB Win 11 Pro Silver Notebook",
+    sku: "A38B8ET",
+    model: "",
+    productId: "pb440",
+    listedPriceCents: 2_625_000,
+    specifications: "HP ProBook 440 G11 14 inch Core-U5 16GB 512GB Windows 11 Pro",
+  });
+  const plan = planSourcing({
+    requirements,
+    pools: { ...emptyPools(), catalogue: [exact] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "QUOTE");
+  if (plan.kind !== "QUOTE") return;
+  assert.equal(plan.options.length, 1);
+  assert.equal(plan.options[0]?.quantity, 2);
+  assert.equal(plan.options[0]?.unitPriceCents, 2_625_000);
+});
+
 test("test A quotes an exact catalogue SKU", () => {
   const [requirement] = extractProductRequirements("Quote 2 × SKU 21QC000YZA.");
   assert.equal(requirement?.sku, "21QC000YZA");
