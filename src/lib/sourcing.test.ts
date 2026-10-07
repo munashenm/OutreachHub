@@ -448,6 +448,129 @@ test("test B quotes a catalogue laptop that meets the specification", () => {
   assert.equal(plan.options[0]?.sourceKind, "URBAN_FOCUS_CATALOGUE");
 });
 
+test("a specification keeps the processor when it continues on the next line", () => {
+  const requirements = extractProductRequirements(`Please quote 2 business laptops: 16GB RAM 512GB SSD Windows 11 Pro Intel
+Core i5 / Core Ultra 5 or equivalent.`);
+  assert.equal(requirements.length, 1);
+  assert.equal(requirements[0]?.quantity, 2);
+  assert.match(requirements[0]?.processor ?? "", /Core i5/);
+  assert.match(requirements[0]?.processor ?? "", /Core Ultra 5/);
+  assert.equal(requirements[0]?.ramGb, 16);
+  assert.equal(requirements[0]?.storageGb, 512);
+  assert.equal(requirements[0]?.operatingSystem, "Windows 11 Pro");
+  const n95 = catalogueLaptop({
+    name: "Decibell S1 Intel Alder Lake N95 Professional",
+    sku: "N95",
+    model: "",
+    productId: "n95",
+    listedPriceCents: 745_000,
+    specifications: "Core i5, 16GB RAM, 512GB SSD, Windows 11 Pro",
+  });
+  const dell = catalogueLaptop({
+    name: "Dell Pro 15 Intel Core i5 16GB 512GB Win 11 Pro",
+    sku: "DELL-PRO",
+    model: "",
+    productId: "dell",
+    listedPriceCents: 1_865_000,
+    specifications: "Dell Pro 15 Intel Core i5 16GB 512GB Windows 11 Pro",
+  });
+  const probook = catalogueLaptop({
+    name: "HP ProBook 440 G11 14 inch Core-U5 16GB 512GB Win 11 Pro",
+    sku: "A38B8ET",
+    model: "",
+    productId: "pb440",
+    listedPriceCents: 2_625_000,
+    specifications: "HP ProBook 440 G11 Core-U5 16GB 512GB Windows 11 Pro",
+  });
+  assert.equal(compareRequirement(requirements[0]!, n95), "DOES_NOT_MEET");
+  const plan = planSourcing({
+    requirements,
+    pools: { ...emptyPools(), catalogue: [n95, probook, dell] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "QUOTE");
+  if (plan.kind !== "QUOTE") return;
+  assert.equal(plan.options.length, 1);
+  assert.match(plan.options[0]?.name ?? "", /Dell Pro 15/);
+  assert.equal(plan.options[0]?.quantity, 2);
+  assert.equal(plan.options.some((option) => /N95/.test(option.name)), false);
+});
+
+test("a programming recommendation stays on professional laptops at two prices", () => {
+  const [requirement] = extractProductRequirements(`Please quote 2 laptops for programming and technical work.
+No particular make or model is required.
+Recommend two professional options at different price levels.
+Minimum 16GB RAM, 512GB SSD, Windows 11 Pro.`);
+  assert.equal(requirement?.quantity, 2);
+  assert.equal(requirement?.ramGb, 16);
+  const exter = catalogueLaptop({
+    name: "Asus ExterBook1 B1503 Intel Core 3 Professional",
+    brand: "Asus",
+    sku: "EXTER",
+    model: "",
+    productId: "exter",
+    listedPriceCents: 1_500_000,
+    specifications: "Asus ExpertBook B1503 Intel Core 3 Professional Laptop\n16GB RAM\n512GB SSD\nWindows 11 Pro",
+  });
+  const zenbook = catalogueLaptop({
+    name: "ASUS Zenbook Duo UX8406 Intel Core Ultra 9 Professional Laptop",
+    brand: "ASUS",
+    sku: "ZEN",
+    model: "",
+    productId: "zen",
+    listedPriceCents: 6_250_000,
+    specifications: "ThinkPad alternative, 32GB RAM, 1TB SSD, Windows 11 Pro",
+  });
+  const weakExpert = catalogueLaptop({
+    name: "ASUS ExpertBook B1503 Intel Core 3 16GB 512GB Win 11 Pro",
+    brand: "ASUS",
+    sku: "EXPERT",
+    model: "",
+    productId: "expert",
+    listedPriceCents: 1_400_000,
+    specifications: "ASUS ExpertBook B1503 Intel Core 3 16GB 512GB Windows 11 Pro",
+  });
+  const probook = catalogueLaptop({
+    name: "HP ProBook 440 G11 14 inch Core-U5 16GB 512GB Win 11 Pro",
+    sku: "A38B8ET",
+    model: "",
+    productId: "pb440",
+    listedPriceCents: 2_625_000,
+    specifications: "HP ProBook 440 G11 Core-U5 16GB 512GB Windows 11 Pro",
+  });
+  const thinkpad = catalogueLaptop({
+    name: "Lenovo ThinkPad E14 Intel Core i5 16GB 512GB Win 11 Pro",
+    sku: "E14",
+    model: "",
+    productId: "e14",
+    listedPriceCents: 3_200_000,
+    specifications: "Lenovo ThinkPad E14 Intel Core i5 16GB 512GB Windows 11 Pro",
+  });
+  const plan = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [exter, zenbook, weakExpert, probook, thinkpad] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "QUOTE");
+  if (plan.kind !== "QUOTE") return;
+  assert.equal(plan.options.length, 2);
+  assert.match(plan.options[0]?.name ?? "", /ProBook 440/);
+  assert.match(plan.options[1]?.name ?? "", /ThinkPad E14/);
+  assert.equal(plan.options[0]?.quantity, 2);
+  assert.equal(plan.options[1]?.quantity, 2);
+  assert.equal(plan.options[0]?.unitPriceCents, 2_625_000);
+  assert.equal(plan.options[1]?.unitPriceCents, 3_200_000);
+  const onlyConsumer = planSourcing({
+    requirements: [requirement!],
+    pools: { ...emptyPools(), catalogue: [exter, zenbook, weakExpert] },
+    ...margins,
+    now,
+  });
+  assert.equal(onlyConsumer.kind, "SOURCING");
+});
+
 test("a recommendation email keeps the stated minimums and does not ask the customer to choose a model", () => {
   const [requirement] = extractProductRequirements(`RFQ TEST – Programming Laptops Recommendation
 Good day,
