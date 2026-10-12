@@ -1,4 +1,5 @@
 import { barcodeKey, brandModelKey, mpnKey, skuKey } from "./catalogue-reconcile";
+import { extractProductRequirements, requirementSummary } from "./sourcing";
 import { markedUpCents } from "./stock";
 
 export const ACKNOWLEDGEMENT = "Thank you for your request for quotation. We have received your enquiry and are checking current pricing and availability. We will respond with the quotation shortly.";
@@ -191,9 +192,30 @@ export function extractRfqRequest(body: string): ExtractedRfq {
   const emailMatch = body.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
   const referenceMatch = body.match(/\b(?:rfq|reference|ref|enquiry)\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Z0-9][A-Z0-9./-]{2,})/i);
   const products: RfqLineDraft[] = [];
+  for (const requirement of extractProductRequirements(body)) {
+    if (requirement.quantity == null) continue;
+    const description = (requirement.requestedText.split(/\r?\n/).find((line) => line.trim()) || requirementSummary(requirement)).slice(0, 300);
+    if (description.length < 2) continue;
+    products.push({
+      description,
+      quantity: requirement.quantity,
+      manufacturer: requirement.brandPreference,
+      model: requirement.model,
+      sku: requirement.sku,
+      manufacturerPartNumber: requirement.mpn,
+      specifications: requirementSummary(requirement),
+    });
+  }
   for (const line of lines) {
     const product = productLine(line) ?? inlineQuantity(line) ?? specificationRequest(line);
-    if (product) products.push(product);
+    if (!product) continue;
+    const duplicate = products.some((item) => {
+      if (item.quantity !== product.quantity) return false;
+      if (item.sku && product.sku) return item.sku === product.sku;
+      if (item.manufacturerPartNumber && product.manufacturerPartNumber) return item.manufacturerPartNumber === product.manufacturerPartNumber;
+      return !product.sku && !product.manufacturerPartNumber;
+    });
+    if (!duplicate) products.push(product);
   }
   return {
     customerName: labeled(["name", "contact", "attention", "attn"]),

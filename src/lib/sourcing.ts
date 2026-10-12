@@ -135,7 +135,174 @@ export function emptyRequirement(requestedText = ""): ProductRequirement {
   };
 }
 
+const ACCESSORY_TYPES = new Set(["Power supply", "Charger", "Adapter", "Cable", "Dock"]);
+const QUANTITY_NOUN = "laptop\\s+power\\s+supplies|laptop\\s+power\\s+supply|laptop\\s+chargers?|power\\s+supplies|power\\s+supply|chargers?|adapters?|cables?|docks?|laptops?|notebooks?|workstations?|servers?|switches?|monitors?|printers?|desks?";
+
 export function extractProductRequirements(body: string): ProductRequirement[] {
+  const structured = extractStructuredRequirements(body);
+  if (structured.length > 0) return structured;
+  return extractGroupedRequirements(body);
+}
+
+export function mergeRequirementLists(primary: ProductRequirement[], extra: ProductRequirement[]): ProductRequirement[] {
+  if (primary.length === 0) return extra;
+  if (extra.length === 0) return primary;
+  const merged = primary.map((item) => ({ ...item }));
+  for (const item of extra) {
+    const same = merged.find((existing) => sameRequestedProduct(existing, item));
+    if (!same) {
+      merged.push({ ...item });
+      continue;
+    }
+    const filled = fillRequirement(same, item);
+    Object.assign(same, filled);
+    if (same.quantity == null && item.quantity != null) same.quantity = item.quantity;
+  }
+  return merged;
+}
+
+function sameRequestedProduct(left: ProductRequirement, right: ProductRequirement) {
+  if (left.productType && right.productType && left.productType !== right.productType) return false;
+  if (left.sku && right.sku) return left.sku.toLowerCase() === right.sku.toLowerCase();
+  if (left.mpn && right.mpn) return left.mpn.toLowerCase() === right.mpn.toLowerCase();
+  if (left.model && right.model) return left.model.toLowerCase() === right.model.toLowerCase();
+  return Boolean(left.productType) && left.productType === right.productType;
+}
+
+function extractStructuredRequirements(body: string): ProductRequirement[] {
+  const table = tableRequirements(body);
+  if (table.length > 0) return table;
+  const spans = quantitySpans(body);
+  if (spans.length === 0) return [];
+  if (spans.length === 1 && spans[0] && !spans[0].accessory) {
+    const requirement = requirementFromText(body);
+    requirement.quantity = spans[0].quantity;
+    const productType = productTypeForPhrase(spans[0].phrase);
+    if (productType) requirement.productType = productType;
+    if (/^[A-Z0-9-]{3,}$/i.test(spans[0].phrase) && /\d/.test(spans[0].phrase)) {
+      requirement.mpn = spans[0].phrase.toUpperCase();
+      if (!requirement.sku) requirement.sku = requirement.mpn;
+    }
+    return requirementIsUseful(requirement) ? [requirement] : [];
+  }
+  const lines = body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const specLines = lines.filter((line) => isComputerSpecLine(line) && !spans.some((span) => line.toLowerCase().includes(span.phrase.toLowerCase())));
+  return spans.map((span) => {
+    const host = lines.filter((line) => line.toLowerCase().includes(span.phrase.toLowerCase())).join("\n");
+    const extra = span.accessory ? host : [host, ...specLines].filter(Boolean).join("\n");
+    return requirementForSpan(span, extra);
+  }).filter(requirementIsUseful);
+}
+
+type QuantitySpan = { quantity: number; phrase: string; index: number; length: number; accessory: boolean };
+
+function quantitySpans(body: string): QuantitySpan[] {
+  const withoutIndexes = body.split(/\r?\n/).map((line) => line.replace(/^\s*\d+[.)]\s+/, "")).join("\n");
+  const pattern = new RegExp(`\\b(\\d+)\\s*(?:x|×)?\\s+(?:(additional|extra|replacement|more)\\s+)?((?:business|professional|replacement)\\s+)?(${QUANTITY_NOUN})\\b`, "gi");
+  const unitPattern = /\b(\d+)\s+units?\s+of\s+([A-Z0-9][A-Z0-9-]{3,})\b/gi;
+  const found: QuantitySpan[] = [];
+  for (const match of withoutIndexes.matchAll(pattern)) {
+    const quantity = boundedQuantity(Number(match[1]));
+    if (quantity == null || match.index == null || !match[4]) continue;
+    const phrase = [match[2], match[3], match[4]].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    found.push({ quantity, phrase, index: match.index, length: match[0].length, accessory: isAccessoryPhrase(match[4]) });
+  }
+  for (const match of withoutIndexes.matchAll(unitPattern)) {
+    const quantity = boundedQuantity(Number(match[1]));
+    if (quantity == null || match.index == null || !match[2]) continue;
+    found.push({ quantity, phrase: match[2], index: match.index, length: match[0].length, accessory: false });
+  }
+  found.sort((left, right) => left.index - right.index || right.length - left.length);
+  const kept: QuantitySpan[] = [];
+  for (const span of found) {
+    const overlaps = kept.some((item) => span.index < item.index + item.length && item.index < span.index + span.length);
+    if (!overlaps) kept.push(span);
+  }
+  return kept;
+}
+
+function requirementForSpan(span: QuantitySpan, specs: string): ProductRequirement {
+  const text = `${span.quantity} x ${span.phrase}${specs ? `\n${specs}` : ""}`;
+  const requirement = requirementFromText(text);
+  requirement.quantity = span.quantity;
+  const partCode = /^[A-Z0-9-]{3,}$/i.test(span.phrase) && /\d/.test(span.phrase) ? span.phrase.toUpperCase() : "";
+  if (partCode) {
+    requirement.mpn = partCode;
+    if (!requirement.sku) requirement.sku = partCode;
+  }
+  const productType = productTypeForPhrase(span.phrase);
+  if (productType) requirement.productType = productType;
+  if (span.accessory) clearComputerSpecs(requirement);
+  return requirement;
+}
+
+function tableRequirements(body: string): ProductRequirement[] {
+  const rows = body.split(/\r?\n/).map((line) => splitSimpleRow(line.trim())).filter((row) => row.length > 1);
+  const headerIndex = rows.findIndex((row) => row.some((cell) => /description|item|product/i.test(cell)) && row.some((cell) => /qty|quantity/i.test(cell)));
+  if (headerIndex < 0) return [];
+  const header = rows[headerIndex]?.map((cell) => cell.toLowerCase()) ?? [];
+  const descriptionIndex = header.findIndex((cell) => /description|item|product/.test(cell));
+  const quantityIndex = header.findIndex((cell) => /qty|quantity/.test(cell));
+  if (descriptionIndex < 0 || quantityIndex < 0) return [];
+  const items: ProductRequirement[] = [];
+  for (const row of rows.slice(headerIndex + 1)) {
+    const description = row[descriptionIndex]?.trim() ?? "";
+    const quantity = boundedQuantity(Number(row[quantityIndex]?.trim()));
+    if (description.length < 2 || quantity == null || /description|item|product/i.test(description)) continue;
+    const requirement = requirementFromText(`${quantity} x ${description}`);
+    requirement.quantity = quantity;
+    const productType = productTypeForPhrase(description);
+    if (productType) requirement.productType = productType;
+    if (isAccessoryPhrase(description)) clearComputerSpecs(requirement);
+    items.push(requirement);
+  }
+  return items;
+}
+
+function splitSimpleRow(line: string) {
+  if (!line) return [];
+  if (line.includes("|")) return line.split("|").map((cell) => cell.trim()).filter(Boolean);
+  if (line.includes("\t")) return line.split("\t").map((cell) => cell.trim()).filter(Boolean);
+  if (/\s{2,}/.test(line)) return line.split(/\s{2,}/).map((cell) => cell.trim()).filter(Boolean);
+  return [line];
+}
+
+function clearComputerSpecs(requirement: ProductRequirement) {
+  requirement.processor = "";
+  requirement.processorGeneration = "";
+  requirement.ramGb = null;
+  requirement.storageGb = null;
+  requirement.storageType = "";
+  requirement.screenInches = null;
+  requirement.operatingSystem = "";
+  requirement.formFactor = "";
+}
+
+function isAccessoryPhrase(phrase: string) {
+  return /\b(power\s+supplies|power\s+supply|chargers?|adapters?|cables?|docks?)\b/i.test(phrase);
+}
+
+function productTypeForPhrase(phrase: string) {
+  if (/\bpower\s+suppl/i.test(phrase)) return "Power supply";
+  if (/\bchargers?\b/i.test(phrase)) return "Charger";
+  if (/\badapters?\b/i.test(phrase)) return "Adapter";
+  if (/\bcables?\b/i.test(phrase)) return "Cable";
+  if (/\bdocks?\b/i.test(phrase)) return "Dock";
+  if (/\blaptops?|notebooks?\b/i.test(phrase)) return "Laptop";
+  if (/\bworkstations?\b/i.test(phrase)) return "Workstation";
+  if (/\bservers?\b/i.test(phrase)) return "Server";
+  if (/\bswitches?\b/i.test(phrase)) return "Switch";
+  if (/\bmonitors?\b/i.test(phrase)) return "Monitor";
+  if (/\bprinters?\b/i.test(phrase)) return "Printer";
+  if (/\bdesks?\b/i.test(phrase)) return "Desk";
+  return "";
+}
+
+function isComputerSpecLine(line: string) {
+  return /\b(core\s+i[3579]|core\s+ultra|ryzen\s+[3579]|\d+\s*gb(?:\s+ddr\d+)?\s*(?:ram|memory)|\d+\s*(?:gb|tb)(?:\s+pcie)?\s*(?:ssd|nvme|hdd)|windows\s*11|\d+(?:\.\d+)?\s*-?\s*inch)\b/i.test(line);
+}
+
+function extractGroupedRequirements(body: string): ProductRequirement[] {
   const lines = body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const groups: string[][] = [];
   let current: string[] = [];
@@ -162,7 +329,10 @@ export function extractProductRequirements(body: string): ProductRequirement[] {
     if (current.length > 0) current.push(line);
   }
   flush();
-  return groups.map((group) => requirementFromText(group.join("\n"))).filter(requirementIsUseful);
+  const grouped = groups.map((group) => requirementFromText(group.join("\n"))).filter(requirementIsUseful);
+  if (grouped.length > 0) return grouped;
+  const whole = requirementFromText(body);
+  return requirementIsUseful(whole) ? [whole] : [];
 }
 
 export function parseRequirementFragment(text: string): ProductRequirement | null {
@@ -187,6 +357,7 @@ export function requirementSummary(requirement: ProductRequirement) {
 }
 
 export function requirementIsVague(requirement: ProductRequirement) {
+  if (ACCESSORY_TYPES.has(requirement.productType)) return false;
   if (isRecommendationRequest(requirement.requestedText) && (requirement.productType || /\blaptops?|notebooks?|servers?|switches?\b/i.test(requirement.requestedText))) return false;
   if (requirement.sku || requirement.mpn || requirement.model) return false;
   const specified = [requirement.processor, requirement.ramGb, requirement.storageGb, requirement.operatingSystem, requirement.screenInches, requirement.graphics].filter((value) => value != null && value !== "").length;
@@ -293,22 +464,34 @@ export function planSourcing(input: {
     return { kind: "CLARIFICATION", message: CLARIFICATION_REPLY };
   }
   const priced: PricedSource[] = [];
+  const held: string[] = [];
   for (const requirement of input.requirements) {
+    if (requirement.quantity == null && !isRecommendationRequest(requirement.requestedText)) {
+      held.push("A quantity was not tied to every requested item.");
+      continue;
+    }
     const found = chooseSources(requirement, input.pools, now, freshnessMs, input);
     if (found.blocked) return { kind: "STAFF_REVIEW", note: found.blocked };
     if (found.options.length === 0) {
-      return { kind: "SOURCING", message: SOURCING_REPLY, note: "No in-stock source meets the specification yet. Sourcing is continuing." };
+      held.push(`${requirementSummary(requirement) || requirement.productType || "An item"} has no verified source yet.`);
+      continue;
     }
     priced.push(...found.options);
   }
+  if (priced.length === 0) {
+    if (held.some((note) => note.startsWith("A quantity"))) {
+      return { kind: "STAFF_REVIEW", note: "The specification was read. The quantity was not tied to the product, so the customer was not emailed." };
+    }
+    return { kind: "SOURCING", message: SOURCING_REPLY, note: held[0] || "No in-stock source meets the specification yet. Sourcing is continuing." };
+  }
   const options = collapseIdenticalOptions(priced);
   const catalogueBacked = options.every((option) => option.sourceKind !== "EXTERNAL_SOURCE");
-  const send = options.length > 0 && options.every((option) => option.canSend) && catalogueBacked;
+  const send = held.length === 0 && options.length > 0 && options.every((option) => option.canSend) && catalogueBacked;
   return {
     kind: "QUOTE",
     send,
-    note: send ? "A catalogue or supplier product meets the request, so the quotation can be sent." : "A sourced quotation is ready for approval.",
-    options: options.slice(0, 3),
+    note: held.length > 0 ? `Held for internal approval. ${held.join(" ")}` : send ? "A catalogue or supplier product meets the request, so the quotation can be sent." : "A sourced quotation is ready for approval. Indicative online prices are not a binding quotation.",
+    options: options.slice(0, 8),
   };
 }
 
@@ -354,6 +537,7 @@ function firstStage(requirement: ProductRequirement, candidates: SourcingCandida
   if (!rejected && requirement.model) stages.push({ limit: 1, match: (candidate) => fuzzyModel(requirement, candidate) });
   const identityRequested = Boolean(requirement.sku || requirement.mpn || requirement.model);
   if (!(rejected && identityRequested)) stages.push({ limit: 1, match: (candidate) => specificationMatch(requirement, candidate) });
+  if (!rejected && ACCESSORY_TYPES.has(requirement.productType)) stages.push({ limit: 1, match: (candidate) => accessoryNameMatch(requirement, candidate) });
   if (!rejected) stages.push({ limit: 1, match: (candidate) => suitableAlternative(requirement, candidate) });
   for (const stage of stages) {
     const found = candidates.filter(stage.match);
@@ -431,19 +615,12 @@ export function candidateScore(requirement: ProductRequirement, candidate: Sourc
 
 export function requirementsFromSources(body: string, attachment: string): ProductRequirement[] {
   const fromBody = extractProductRequirements(body);
+  const fromAttachment = attachment.trim() ? extractProductRequirements(attachment) : [];
+  const merged = mergeRequirementLists(fromBody, fromAttachment);
   const supplement = attachment.trim() ? requirementFromText(attachment) : emptyRequirement();
-  const supplementUseful = meaningfulRequirement(supplement);
-  if (fromBody.length === 0) {
-    const fromAttachment = extractProductRequirements(attachment);
-    if (fromAttachment.length > 0) return fromAttachment;
-    return supplementUseful ? [supplement] : [];
-  }
-  if (!supplementUseful) return fromBody;
-  return fromBody.map((requirement) => fillRequirement(requirement, supplement));
-}
-
-function meaningfulRequirement(requirement: ProductRequirement) {
-  return requirementIsUseful(requirement) || hasComparableSpecs(requirement);
+  if (!hasComparableSpecs(supplement)) return merged.length > 0 ? merged : requirementIsUseful(supplement) ? [supplement] : [];
+  if (merged.length === 0) return [supplement];
+  return merged.map((item) => ACCESSORY_TYPES.has(item.productType) ? item : fillRequirement(item, supplement));
 }
 
 function fillRequirement(primary: ProductRequirement, extra: ProductRequirement): ProductRequirement {
@@ -493,6 +670,13 @@ function specificationMatch(requirement: ProductRequirement, candidate: Sourcing
   if (!hasComparableSpecs(requirement)) return false;
   const grade = compareRequirement(requirement, candidate);
   return grade === "EXACT" || grade === "MEETS_REQUIREMENT" || grade === "EXCEEDS_REQUIREMENT";
+}
+
+function accessoryNameMatch(requirement: ProductRequirement, candidate: SourcingCandidate) {
+  const noun = requirement.productType.toLowerCase();
+  if (!noun) return false;
+  const haystack = `${candidate.name} ${candidate.model} ${candidate.specifications}`.toLowerCase();
+  return haystack.includes(noun);
 }
 
 function suitableAlternative(requirement: ProductRequirement, candidate: SourcingCandidate) {
@@ -694,6 +878,8 @@ function requirementFromText(text: string): ProductRequirement {
   const model = text.match(/\b((?:thinkpad|latitude|alienware|probook|elitebook|precision|inspiron|xps)\s+[a-z]?\d{2,4}[a-z0-9]*)\b/i)?.[0] ?? "";
   requirement.model = model;
   const labelled = text.match(/\b(?:sku|mpn|part(?:\s*number)?)\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{2,})\b/i)?.[1] ?? "";
+  const modelCode = text.match(/\bmodel\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{2,})\b/i)?.[1] ?? "";
+  if (modelCode && /\d/.test(modelCode) && !requirement.mpn) requirement.mpn = modelCode.toUpperCase();
   const afterQuantity = text.match(/(?:^|\s)[x×]\s+([A-Z0-9][A-Z0-9-]{2,})/i)?.[1] ?? "";
   const sku = labelled || (/\d/.test(afterQuantity) ? afterQuantity : "");
   if (sku && !/thinkpad/i.test(sku)) requirement.sku = sku.toUpperCase();
@@ -703,7 +889,9 @@ function requirementFromText(text: string): ProductRequirement {
 
 function quantityFrom(text: string) {
   const stripped = stripSpecNumbers(text);
-  const explicit = stripped.match(/\b(\d+)\s*[x×]\b/i) ?? stripped.match(/\b(?:quote|supply(?:\s+of)?|order(?:\s+of)?|need|qty|quantity)\s*[:#]?\s*(\d+)\b/i);
+  const explicit = stripped.match(/\b(\d+)\s*[x×]\b/i)
+    ?? stripped.match(/\b(?:quote|quotation|supply(?:\s+of)?|order(?:\s+of)?|need|pricing|qty|quantity)\s+(?:for\s+|the\s+)?(\d+)\b/i)
+    ?? stripped.match(new RegExp(`\\b(\\d+)\\s+(?:additional\\s+|extra\\s+|replacement\\s+)?(?:business\\s+|professional\\s+|laptop\\s+)?(?:${QUANTITY_NOUN})\\b`, "i"));
   if (explicit?.[1]) return boundedQuantity(Number(explicit[1]));
   const word = stripped.match(/\b(?:quote|supply|order|need|for)\s+(one|two|three|four|five|six|seven|eight|nine|ten|twenty)\b/i);
   if (word?.[1]) return NUMBER_WORDS[word[1].toLowerCase()] ?? null;

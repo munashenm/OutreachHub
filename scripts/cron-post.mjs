@@ -20,6 +20,7 @@ export async function postCron(pathname, options = {}) {
     const response = await fetch(url, {
       method: "POST",
       redirect: "manual",
+      signal: AbortSignal.timeout(120_000),
       headers: {
         accept: "application/json",
         authorization: `Bearer ${secret}`,

@@ -369,11 +369,14 @@ function tableItems(filename: string, page: DocumentPage): AnalysisItem[] {
 function lineItem(filename: string, page: number, line: string, fallbackNumber: number): AnalysisItem | null {
   const trimmed = line.trim();
   const numbered = trimmed.match(/^(\d+)[.)]\s+(.+)$/);
-  const quantified = trimmed.match(/^(\d+)\s*[x×]\s+(.+)$/i);
-  const chosen = numbered ?? quantified;
-  if (!chosen?.[2] || chosen[2].trim().length < 3) return null;
-  const quantity = quantified ? Number(quantified[1]) : null;
-  return itemFrom(filename, page, numbered?.[1] ?? String(fallbackNumber), chosen[2].trim(), quantity, "", 80);
+  const body = (numbered?.[2] ?? trimmed).trim();
+  const quantified = body.match(/^(\d+)\s*[x×]\s+(.+)$/i);
+  const prose = body.match(/\b(\d+)\s+(?:(?:additional|extra|replacement|more)\s+)?((?:laptop\s+)?(?:power\s+supplies|power\s+supply|chargers?|adapters?|laptops?|notebooks?|servers?|switches?|monitors?|printers?).*)/i);
+  const quantityText = quantified?.[1] ?? prose?.[1] ?? "";
+  const quantity = /^\d+$/.test(quantityText) ? Number(quantityText) : null;
+  const description = (quantified?.[2] ?? body).trim();
+  if ((!numbered && quantity == null) || description.length < 3) return null;
+  return itemFrom(filename, page, numbered?.[1] ?? String(fallbackNumber), description, quantity, "", 80);
 }
 
 function itemFrom(filename: string, page: number, lineNumber: string, description: string, quantity: number | null, unit: string, confidence: number): AnalysisItem {

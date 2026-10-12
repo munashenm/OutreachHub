@@ -26,12 +26,12 @@ import { recordActivity } from "./activity-service";
 import { extractQuotationFields } from "./ai-service";
 import { sendQuote } from "./quote-service";
 import { sendCustomerResponse } from "./reply-service";
-import { catalogueCommercialState, extractProductRequirements, planSourcing, QUANTITY_CLARIFICATION, requirementAwaitingQuantity, requirementSummary, requirementsFromSources, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
+import { catalogueCommercialState, extractProductRequirements, planSourcing, requirementAwaitingQuantity, requirementSummary, requirementsFromSources, type ProductRequirement, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
 import { sourceExternalForRequirements } from "./external-sourcing-service";
 import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp, unpricedCatalogueNote } from "./sales-response-service";
 import { analyseRfqDocuments, analysisTextForRfq, listTenderAnalyses, responseModeForRfq, saveAnalysisMatches } from "./document-analysis-service";
 import { matchRequestedSpecification, UNPRICED_LINE, type AnalysisMatch } from "../lib/document-analysis";
-import { determineInitialResponse, sendResponseOnce, customerResponseAllowed, threadCustomerAction, type InitialResponse, type ProcessingRow, type ProcessingStore, type ResponseFacts } from "../lib/inbound-response";
+import { determineInitialResponse, inboundIsHistorical, sendResponseOnce, customerResponseAllowed, threadCustomerAction, type InitialResponse, type ProcessingRow, type ProcessingStore, type ResponseFacts } from "../lib/inbound-response";
 import { asksToProceed, requestStrictness } from "../lib/rfq-match";
 import { retryDelayMs } from "../lib/quote-send";
 import { analyzeInboundEmail, parseRfqAnalysis, type RfqAnalysis } from "../lib/ai/rfq-analyzer";
@@ -121,6 +121,11 @@ async function processInboundMessage(messageId: string) {
     select: { id: true, minimumMarginPercent: true, autoQuoteMarginPercent: true, autoSendMarginPercent: true },
   });
   if (!workspace) return "skipped";
+  if (inboundIsHistorical({ receivedAt: message.sentAt, cutoff: process.env.RFQ_PROCESS_AFTER })) {
+    await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
+    console.info(`[RFQ] messageId=${message.externalId || message.id} historical-skipped`);
+    return "historical-skipped";
+  }
   const kind = classifyInbound({ subject: message.subject, body: message.body, campaignReply: Boolean(message.campaignId) });
   await db.message.update({ where: { id: message.id }, data: { category: inboxCategory(kind) } });
   if (await knownSupplierSender(message.workspaceId, message.fromEmail)) {
@@ -504,33 +509,32 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   const requirements = parsed.length > 0 ? parsed : requirementsForSourcing(threadText, analysis);
   await db.rfq.update({ where: { id: rfq.id }, data: { status: "PARSING" } });
   await recordRfqEvent(workspace.id, rfq.id, "EMAIL_RECEIVED", "PARSING", "Requirements are being read from the thread.");
-  await storeParsedRequirement(rfq, requirements[0], workspace.id);
+  await storeParsedRequirements(rfq, requirements, workspace.id);
   const margins = {
     minimumMarginPercent: workspace.minimumMarginPercent,
     autoQuoteMarginPercent: workspace.autoQuoteMarginPercent,
     autoSendMarginPercent: workspace.autoSendMarginPercent,
   };
-  let pools = await sourcingPools(workspace.id);
+  let pools = await sourcingPools(workspace.id, requirements);
   const strictness = requirements[0] ? requestStrictness(requirements[0].requestedText, Boolean(requirements[0].sku || requirements[0].mpn || requirements[0].model)) : "";
   const requirementsHash = createHash("sha256").update(requirements.map((requirement) => requirement.requestedText).join("\n")).digest("hex").slice(0, 16);
   await db.rfq.update({ where: { id: rfq.id }, data: { status: "MATCHING", strictness, requirementsHash } });
   await recordRfqEvent(workspace.id, rfq.id, "REQUIREMENTS_PARSED", "MATCHING", strictness || "No structured requirement.");
   let plan = planSourcing({ requirements, pools, ...margins });
   if (plan.kind === "SOURCING") {
-    const live = await sourceExternalForRequirements(workspace.id, requirements);
+    const live = await sourceExternalForRequirements(workspace.id, requirements.filter((requirement) => requirement.quantity != null).slice(0, 2));
     if (live.candidates.length > 0) {
       pools = { ...pools, external: [...pools.external, ...live.candidates] };
       plan = planSourcing({ requirements, pools, ...margins });
     }
     if (plan.kind === "SOURCING") plan = { ...plan, note: live.note };
   }
-  if (requirementAwaitingQuantity(requirements[0]) && plan.kind === "SOURCING") {
-    plan = { ...plan, message: QUANTITY_CLARIFICATION, note: "The specification was read. The quantity was not stated." };
-  }
-  if (plan.kind === "CLARIFICATION") {
-    await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_CLARIFICATION", automationNote: plan.message } });
-    await recordRfqEvent(workspace.id, rfq.id, "CLARIFICATION_SENT", "NEEDS_CLARIFICATION", plan.message);
-    return respond({ planKind: "CLARIFICATION", planMessage: plan.message });
+  if (plan.kind === "CLARIFICATION" || plan.kind === "STAFF_REVIEW") {
+    const note = plan.kind === "CLARIFICATION" ? plan.message : plan.note;
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: note } });
+    await recordRfqEvent(workspace.id, rfq.id, "REVIEW_REQUIRED", "REVIEWING", note);
+    await openSourcingTask(workspace.id, rfq.id, note);
+    return respond({ planKind: "STAFF_REVIEW" });
   }
   const requirement = requirements[0];
   const sales = requirement
@@ -630,9 +634,9 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   await generateQuotePdf(workspace.id, draft.id);
   await db.rfq.update({ where: { id: rfq.id }, data: { status: "QUOTE_READY", automationNote: plan.note } });
   await recordRfqEvent(workspace.id, rfq.id, "PDF_GENERATED", "QUOTE_READY", plan.note);
-  if (requirementAwaitingQuantity(requirements[0])) {
-    await db.rfq.update({ where: { id: rfq.id }, data: { status: "NEEDS_CLARIFICATION", automationNote: QUANTITY_CLARIFICATION } });
-    return respond({ planKind: "QUOTE", awaitingQuantity: true });
+  if (requirements.some((requirement) => requirement.quantity == null)) {
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: "A quantity was not tied to every item. The draft was kept for internal review and was not emailed." } });
+    return respond({ planKind: "STAFF_REVIEW" });
   }
   const documentMode = await responseModeForRfq(rfq.id);
   if (documentMode && documentMode !== "AUTO_SEND") {
@@ -674,18 +678,51 @@ function storedAnalysis(value: unknown) {
   return parseRfqAnalysis((value as Record<string, unknown>).ai);
 }
 
-export async function sourcingPools(workspaceId: string): Promise<SourcingPools> {
+export async function sourcingPools(workspaceId: string, requirements: ProductRequirement[] = []): Promise<SourcingPools> {
   const db = getDb();
   const now = Date.now();
   const freshAfter = new Date(now - 24 * 60 * 60 * 1000);
-  const [products, offers, feedItems, external] = await Promise.all([
-    db.product.findMany({ where: { workspaceId, active: true }, select: { id: true, sku: true, name: true, brand: true, manufacturerPartNumber: true, specifications: true, stockOnHand: true, unitPriceCents: true } }),
-    db.supplierPrice.findMany({ where: { workspaceId }, include: { supplier: { select: { name: true, markupPercent: true, authType: true, priceSyncIntervalMinutes: true, scorecard: { select: SCORECARD_FIELD_SELECT } } } } }),
+  const identity = [...new Set(requirements.flatMap((requirement) => [requirement.sku, requirement.mpn, requirement.model].map((value) => value.trim()).filter((value) => value.length >= 3)))].slice(0, 8);
+  const productSelect = { id: true, sku: true, name: true, brand: true, manufacturerPartNumber: true, specifications: true, stockOnHand: true, unitPriceCents: true } as const;
+  const identityWhere = identity.length === 0 ? null : {
+    workspaceId,
+    active: true,
+    OR: identity.flatMap((token) => [
+      { sku: { contains: token, mode: "insensitive" as const } },
+      { name: { contains: token, mode: "insensitive" as const } },
+      { manufacturerPartNumber: { contains: token, mode: "insensitive" as const } },
+    ]),
+  };
+  let products = await db.product.findMany({
+    where: identityWhere ?? { workspaceId, active: true },
+    orderBy: { stockOnHand: "desc" },
+    take: identity.length > 0 ? 80 : 400,
+    select: productSelect,
+  });
+  if (identity.length > 0 && products.length === 0) {
+    products = await db.product.findMany({
+      where: { workspaceId, active: true },
+      orderBy: { stockOnHand: "desc" },
+      take: 400,
+      select: productSelect,
+    });
+  }
+  const productIds = products.map((product) => product.id);
+  const [offers, feedItems, external] = await Promise.all([
+    db.supplierPrice.findMany({ where: { workspaceId, productId: { in: productIds.length > 0 ? productIds : ["__none__"] } }, include: { supplier: { select: { name: true, markupPercent: true, authType: true, priceSyncIntervalMinutes: true, scorecard: { select: SCORECARD_FIELD_SELECT } } } } }),
     db.supplierFeedItem.findMany({
-      where: { workspaceId },
+      where: identity.length === 0 ? { workspaceId } : {
+        workspaceId,
+        OR: identity.flatMap((token) => [
+          { supplierSku: { contains: token, mode: "insensitive" as const } },
+          { name: { contains: token, mode: "insensitive" as const } },
+          { manufacturerPartNumber: { contains: token, mode: "insensitive" as const } },
+        ]),
+      },
+      take: identity.length > 0 ? 200 : 400,
       include: { supplier: { select: { name: true, markupPercent: true, authType: true, priceSyncIntervalMinutes: true, leadTimeDays: true, scorecard: { select: SCORECARD_FIELD_SELECT } } } },
     }),
-    db.externalSourceOffer.findMany({ where: { workspaceId, checkedAt: { gte: freshAfter }, sourceUrl: { not: "" } } }),
+    db.externalSourceOffer.findMany({ where: { workspaceId, checkedAt: { gte: freshAfter }, sourceUrl: { not: "" } }, take: 100, orderBy: { checkedAt: "desc" } }),
   ]);
   const bestOffer = new Map<string, (typeof offers)[number]>();
   for (const offer of offers) {
@@ -911,31 +948,41 @@ async function rememberAlternativeQuote(rfq: { id: string; lines: { id: string }
   }
 }
 
-async function storeParsedRequirement(rfq: { id: string; lines: { id: string; specifications: string }[] }, requirement: Parameters<typeof requirementSummary>[0] | undefined, workspaceId: string) {
-  const summary = requirement ? requirementSummary(requirement) : "";
-  if (!summary) return;
+async function storeParsedRequirements(rfq: { id: string; lines: { id: string; specifications: string }[] }, requirements: ProductRequirement[], workspaceId: string) {
+  const useful = requirements.filter((requirement) => requirementSummary(requirement) || requirement.productType);
+  if (useful.length === 0) return;
   const db = getDb();
-  const line = rfq.lines[0];
-  if (!line) {
-    const created = await db.rfqLine.create({
-      data: {
-        workspaceId,
-        rfqId: rfq.id,
-        description: summary,
-        specifications: summary,
-        quantity: requirement?.quantity == null ? null : new Prisma.Decimal(requirement.quantity.toFixed(2)),
-      },
-    });
-    rfq.lines.unshift({ id: created.id, specifications: summary });
-    return;
-  }
-  if (line.specifications !== summary) {
+  for (const [index, requirement] of useful.entries()) {
+    const summary = requirementSummary(requirement) || requirement.productType;
+    const quantity = requirement.quantity == null ? null : new Prisma.Decimal(requirement.quantity.toFixed(2));
+    const specifications = (requirement.requestedText || summary).slice(0, 800);
+    const line = rfq.lines[index];
+    if (!line) {
+      const created = await db.rfqLine.create({
+        data: {
+          workspaceId,
+          rfqId: rfq.id,
+          description: summary,
+          specifications,
+          quantity,
+          manufacturer: requirement.brandPreference,
+          modelName: requirement.model,
+          sku: requirement.sku,
+          manufacturerPartNumber: requirement.mpn,
+        },
+      });
+      rfq.lines.push({ id: created.id, specifications: summary });
+      continue;
+    }
     await db.rfqLine.update({
       where: { id: line.id },
       data: {
-        specifications: summary,
         description: summary,
-        quantity: requirement?.quantity == null ? null : new Prisma.Decimal(requirement.quantity.toFixed(2)),
+        specifications,
+        ...(quantity != null ? { quantity } : {}),
+        ...(requirement.model ? { modelName: requirement.model } : {}),
+        ...(requirement.sku ? { sku: requirement.sku } : {}),
+        ...(requirement.mpn ? { manufacturerPartNumber: requirement.mpn } : {}),
       },
     });
     line.specifications = summary;

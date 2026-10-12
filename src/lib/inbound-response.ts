@@ -1,6 +1,5 @@
-import { ACKNOWLEDGEMENT, classifyCustomerReply, isQuotationRequest, type InboundKind } from "./automation";
+import { classifyCustomerReply, isQuotationRequest, type InboundKind } from "./automation";
 import { asksToProceed, followUpChangesRequirements } from "./rfq-match";
-import { QUANTITY_CLARIFICATION, SOURCING_REPLY } from "./sourcing";
 
 export const INITIAL_DECISIONS = ["QUOTE_READY", "PRICING_PENDING", "SOURCING_REQUIRED", "NEEDS_CLARIFICATION", "NO_RESPONSE"] as const;
 export type InitialDecision = (typeof INITIAL_DECISIONS)[number];
@@ -35,9 +34,18 @@ export function customerResponseAllowed(input: { acknowledgementSent: boolean; d
 
 const NONE: InitialResponse = { decision: "NO_RESPONSE", autoReplyType: "NONE", message: "" };
 
-/** Production default is enabled when AUTO_RFQ_REPLIES_ENABLED is unset. Set it to "false" to stop automatic customer RFQ mail. */
+/** Customer mail stays off until AUTO_RFQ_REPLIES_ENABLED is exactly "true". */
 export function autoRfqRepliesEnabled(env?: { AUTO_RFQ_REPLIES_ENABLED?: string }) {
-  return (env ?? process.env).AUTO_RFQ_REPLIES_ENABLED !== "false";
+  return (env ?? process.env).AUTO_RFQ_REPLIES_ENABLED === "true";
+}
+
+/** Messages received before RFQ_PROCESS_AFTER are left untouched. Unset means no cutoff. */
+export function inboundIsHistorical(input: { receivedAt: Date | null; cutoff?: string }) {
+  const cutoff = input.cutoff?.trim();
+  if (!cutoff || !input.receivedAt) return false;
+  const parsed = new Date(cutoff);
+  if (Number.isNaN(parsed.getTime())) return false;
+  return input.receivedAt.getTime() < parsed.getTime();
 }
 
 export function suppressAutomaticReply(response: InitialResponse, enabled: boolean): InitialResponse {
@@ -60,20 +68,9 @@ export function sendsGenericRfqAcknowledgement(action: "quote-reply" | "revise-q
 
 export function determineInitialResponse(facts: ResponseFacts): InitialResponse {
   if (!facts.notify || !facts.quotationRequest || facts.tenderPackage) return NONE;
-  if (facts.planKind === "CLARIFICATION") return { decision: "NEEDS_CLARIFICATION", autoReplyType: "CLARIFICATION", message: facts.planMessage };
-  if (facts.awaitingQuantity) return { decision: "NEEDS_CLARIFICATION", autoReplyType: "CLARIFICATION", message: QUANTITY_CLARIFICATION };
-  if (facts.salesAction === "CLARIFY" && facts.salesMessage) return { decision: "NEEDS_CLARIFICATION", autoReplyType: "CLARIFICATION", message: facts.salesMessage };
+  if (facts.awaitingQuantity || facts.planKind === "CLARIFICATION" || facts.planKind === "STAFF_REVIEW" || facts.planKind === "SOURCING") return NONE;
   if (facts.planKind === "QUOTE" && facts.planSend && facts.salesAction === "AUTO_SEND" && !facts.documentBlocksAutoSend) {
     return { decision: "QUOTE_READY", autoReplyType: "QUOTATION", message: "" };
-  }
-  if (facts.salesAction === "ALTERNATIVES" && facts.salesMessage) {
-    return { decision: "PRICING_PENDING", autoReplyType: "PRICING_ACK", message: facts.salesMessage };
-  }
-  if (facts.planKind === "SOURCING" && !facts.catalogueProductNamed) {
-    return { decision: "SOURCING_REQUIRED", autoReplyType: "SOURCING_ACK", message: facts.planMessage || SOURCING_REPLY };
-  }
-  if (facts.planKind === "QUOTE" || facts.planKind === "STAFF_REVIEW" || facts.catalogueProductNamed || facts.documentBlocksAutoSend) {
-    return { decision: "PRICING_PENDING", autoReplyType: "PRICING_ACK", message: ACKNOWLEDGEMENT };
   }
   return NONE;
 }

@@ -1,7 +1,7 @@
 import { postCron } from "./cron-post.mjs";
 
 const started = Date.now();
-const budgetMs = 12 * 60 * 1000;
+const budgetMs = 4 * 60 * 1000;
 let phase = "full";
 
 for (;;) {

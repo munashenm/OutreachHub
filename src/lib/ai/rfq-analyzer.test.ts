@@ -131,7 +131,12 @@ test("a parsed email keeps its requirement, and a grounded interpretation fills 
   const kept = requirementsForSourcing(explicit, null);
   assert.equal(kept[0]?.model.toLowerCase().includes("thinkpad"), true);
   const informal = "Can you supply ThinkPad E14 notebooks for the team.";
-  assert.equal(requirementsForSourcing(informal, null).length, 0);
+  const read = requirementsForSourcing(informal, null);
+  assert.equal(read.length, 1);
+  assert.equal(read[0]?.model.toLowerCase().includes("thinkpad"), true);
+  assert.equal(read[0]?.quantity, null);
+  const blank = "Please advise on the attached request.";
+  assert.equal(requirementsForSourcing(blank, null).length, 0);
   const analysis = groundRfqAnalysis(parseRfqAnalysis({
     classification: "RFQ",
     customerIntent: "Quote",
@@ -141,8 +146,19 @@ test("a parsed email keeps its requirement, and a grounded interpretation fills 
     recommendedAction: "QUOTE",
     confidence: 0.93,
     responseDraft: "",
-  })!, informal);
-  const filled = requirementsForSourcing(informal, analysis);
+  })!, blank);
+  assert.equal(requirementsForSourcing(blank, analysis).length, 0);
+  const grounded = groundRfqAnalysis(parseRfqAnalysis({
+    classification: "RFQ",
+    customerIntent: "Quote",
+    items: [{ quantity: 2, category: "laptop", brand: "Lenovo", model: "ThinkPad E14", specifications: ["16GB RAM"], sku: "", mpn: "" }],
+    missingInformation: [],
+    sufficientToQuote: true,
+    recommendedAction: "QUOTE",
+    confidence: 0.93,
+    responseDraft: "",
+  })!, "2 x Lenovo ThinkPad E14, 16GB RAM");
+  const filled = requirementsForSourcing("", grounded);
   assert.equal(filled[0]?.model.toLowerCase().includes("thinkpad e14"), true);
-  assert.equal(filled[0]?.quantity, null);
+  assert.equal(filled[0]?.quantity, 2);
 });

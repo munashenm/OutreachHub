@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ACKNOWLEDGEMENT, classifyInbound, isQuotationRequest } from "./automation";
-import { autoRfqRepliesEnabled, determineInitialResponse, memoryProcessingStore, sendResponseOnce, sendsGenericRfqAcknowledgement, suppressAutomaticReply, threadCustomerAction, customerResponseAllowed, type InitialResponse, type ResponseFacts } from "./inbound-response";
+import { autoRfqRepliesEnabled, determineInitialResponse, inboundIsHistorical, memoryProcessingStore, sendResponseOnce, sendsGenericRfqAcknowledgement, suppressAutomaticReply, threadCustomerAction, customerResponseAllowed, type InitialResponse, type ResponseFacts } from "./inbound-response";
 import { asksToProceed } from "./rfq-match";
 import { CLARIFICATION_REPLY, SOURCING_REPLY } from "./sourcing";
 
@@ -37,64 +37,61 @@ async function deliver(gmailMessageId: string, response: InitialResponse, store 
   return { sent, logs, result, store };
 }
 
-test("a known catalogue item sends the quotation and not an acknowledgement", async () => {
+test("a verified quotation is the only automatic customer email", async () => {
   const response = determineInitialResponse(facts({ planKind: "QUOTE", planSend: true, salesAction: "AUTO_SEND", catalogueProductNamed: true }));
   assert.equal(response.decision, "QUOTE_READY");
-  const delivery = await deliver("gmail-known", response);
+  const delivery = await deliver("gmail-known", response, memoryProcessingStore(), true);
   assert.deepEqual(delivery.sent, ["QUOTATION"]);
   assert.equal(delivery.sent.includes(ACKNOWLEDGEMENT), false);
   assert.equal(delivery.sent.includes(SOURCING_REPLY), false);
 });
 
-test("an unknown catalogue item sends one sourcing acknowledgement", async () => {
+test("an unsourced request is held for staff and is not acknowledged", async () => {
   const response = determineInitialResponse(facts({ planKind: "SOURCING", planMessage: SOURCING_REPLY, salesAction: "EXTERNAL_TASK" }));
-  assert.equal(response.decision, "SOURCING_REQUIRED");
-  assert.equal(response.message, SOURCING_REPLY);
-  const delivery = await deliver("gmail-unknown", response);
-  assert.deepEqual(delivery.sent, [SOURCING_REPLY]);
-  assert.equal(delivery.sent.includes(ACKNOWLEDGEMENT), false);
+  assert.equal(response.decision, "NO_RESPONSE");
+  assert.equal(response.message, "");
+  const delivery = await deliver("gmail-unknown", response, memoryProcessingStore(), true);
+  assert.deepEqual(delivery.sent, []);
 });
 
-test("specifications with no confirmed price send one pricing acknowledgement", async () => {
-  const response = determineInitialResponse(facts({ planKind: "SOURCING", catalogueProductNamed: true, planMessage: SOURCING_REPLY }));
-  assert.equal(response.decision, "PRICING_PENDING");
-  assert.equal(response.message, ACKNOWLEDGEMENT);
-  const delivery = await deliver("gmail-specs", response);
-  assert.deepEqual(delivery.sent, [ACKNOWLEDGEMENT]);
-  assert.equal(delivery.sent.includes(SOURCING_REPLY), false);
+test("a priced draft without permission to send is not emailed", async () => {
+  const response = determineInitialResponse(facts({ planKind: "QUOTE", planSend: false, catalogueProductNamed: true, planMessage: SOURCING_REPLY }));
+  assert.equal(response.decision, "NO_RESPONSE");
+  const delivery = await deliver("gmail-specs", response, memoryProcessingStore(), true);
+  assert.deepEqual(delivery.sent, []);
 });
 
-test("incomplete specifications send one clarification", async () => {
+test("incomplete specifications are not emailed to the customer", async () => {
   const response = determineInitialResponse(facts({ planKind: "CLARIFICATION", planMessage: CLARIFICATION_REPLY }));
-  assert.equal(response.decision, "NEEDS_CLARIFICATION");
-  const delivery = await deliver("gmail-incomplete", response);
-  assert.deepEqual(delivery.sent, [CLARIFICATION_REPLY]);
-  assert.equal(delivery.sent.length, 1);
+  assert.equal(response.decision, "NO_RESPONSE");
+  const delivery = await deliver("gmail-incomplete", response, memoryProcessingStore(), true);
+  assert.deepEqual(delivery.sent, []);
 });
 
 test("the same Gmail message processed twice sends one response", async () => {
-  const response = determineInitialResponse(facts({ planKind: "SOURCING", planMessage: SOURCING_REPLY }));
+  const response = determineInitialResponse(facts({ planKind: "QUOTE", planSend: true, salesAction: "AUTO_SEND" }));
   const store = memoryProcessingStore();
-  const first = await deliver("gmail-twice", response, store);
-  const second = await deliver("gmail-twice", response, store);
-  assert.deepEqual(first.sent, [SOURCING_REPLY]);
+  const first = await deliver("gmail-twice", response, store, true);
+  const second = await deliver("gmail-twice", response, store, true);
+  assert.deepEqual(first.sent, ["QUOTATION"]);
   assert.deepEqual(second.sent, []);
   assert.equal(second.result.blocked, true);
   assert.match(second.logs.join("\n"), /response blocked: already replied/);
 });
 
 test("two workers processing the same message send one response", async () => {
-  const response = determineInitialResponse(facts({ planKind: "SOURCING", planMessage: SOURCING_REPLY }));
+  const response = determineInitialResponse(facts({ planKind: "QUOTE", planSend: true, salesAction: "AUTO_SEND" }));
   const store = memoryProcessingStore();
   const sent: string[] = [];
   const run = () => sendResponseOnce({
     gmailMessageId: "gmail-concurrent",
     threadId: "thread-1",
     response,
+    repliesEnabled: true,
     store,
     send: async () => {
       await Promise.resolve();
-      sent.push(response.message);
+      sent.push("QUOTATION");
     },
   });
   const [left, right] = await Promise.all([run(), run()]);
@@ -106,9 +103,9 @@ test("two workers processing the same message send one response", async () => {
 test("a Gmail sync retry after successful processing does not send again", async () => {
   const response = determineInitialResponse(facts({ planKind: "QUOTE", planSend: true, salesAction: "AUTO_SEND" }));
   const store = memoryProcessingStore();
-  const first = await deliver("gmail-retry", response, store);
+  const first = await deliver("gmail-retry", response, store, true);
   assert.equal(store.rows.get("gmail-retry")?.processingStatus, "SENT");
-  const retry = await deliver("gmail-retry", response, store);
+  const retry = await deliver("gmail-retry", response, store, true);
   assert.deepEqual(first.sent, ["QUOTATION"]);
   assert.deepEqual(retry.sent, []);
   assert.equal(retry.result.blocked, true);
@@ -139,23 +136,18 @@ test("a purchase order or proceed note does not get a new RFQ acknowledgement", 
   assert.equal(sendsGenericRfqAcknowledgement(proceedWithoutQuote), false);
 });
 
-test("AUTO_RFQ_REPLIES_ENABLED=false sends no automatic customer mail", async () => {
-  assert.equal(autoRfqRepliesEnabled({}), true);
+test("automatic customer mail stays off until it is explicitly enabled", async () => {
+  assert.equal(autoRfqRepliesEnabled({}), false);
   assert.equal(autoRfqRepliesEnabled({ AUTO_RFQ_REPLIES_ENABLED: "true" }), true);
   assert.equal(autoRfqRepliesEnabled({ AUTO_RFQ_REPLIES_ENABLED: "false" }), false);
-  const acknowledgement = determineInitialResponse(facts({ planKind: "QUOTE", catalogueProductNamed: true }));
   const quotation = determineInitialResponse(facts({ planKind: "QUOTE", planSend: true, salesAction: "AUTO_SEND" }));
   const clarification = determineInitialResponse(facts({ planKind: "CLARIFICATION", planMessage: CLARIFICATION_REPLY }));
-  assert.equal(acknowledgement.message, ACKNOWLEDGEMENT);
-  assert.equal(suppressAutomaticReply(acknowledgement, false).autoReplyType, "NONE");
+  assert.equal(clarification.decision, "NO_RESPONSE");
   assert.equal(suppressAutomaticReply(quotation, false).decision, "NO_RESPONSE");
-  assert.equal(suppressAutomaticReply(clarification, false).message, "");
-  const ack = await deliver("gmail-flag-ack", acknowledgement, memoryProcessingStore(), false);
   const quote = await deliver("gmail-flag-quote", quotation, memoryProcessingStore(), false);
-  const clarify = await deliver("gmail-flag-clarify", clarification, memoryProcessingStore(), false);
-  assert.deepEqual(ack.sent, []);
   assert.deepEqual(quote.sent, []);
-  assert.deepEqual(clarify.sent, []);
-  assert.equal(ack.logs.some((line) => line.includes("automatic replies disabled")), true);
-  assert.equal(ack.result.sent, false);
+  assert.equal(quote.logs.some((line) => line.includes("automatic replies disabled")), true);
+  assert.equal(inboundIsHistorical({ receivedAt: new Date("2026-10-01T00:00:00.000Z"), cutoff: "2026-10-12T00:00:00.000Z" }), true);
+  assert.equal(inboundIsHistorical({ receivedAt: new Date("2026-10-13T00:00:00.000Z"), cutoff: "2026-10-12T00:00:00.000Z" }), false);
+  assert.equal(inboundIsHistorical({ receivedAt: new Date("2026-01-01T00:00:00.000Z"), cutoff: "" }), false);
 });
