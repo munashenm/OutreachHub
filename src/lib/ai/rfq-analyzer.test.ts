@@ -50,7 +50,7 @@ test("does not auto-send unless the product, price, and stock are verified and c
   assert.equal(quotationSendPermission({ verifiedAutoSend: false, analysis: ready }), "MANUAL");
   assert.equal(quotationSendPermission({ verifiedAutoSend: true, analysis: { ...ready!, confidence: 0.8 } }), "REVIEW");
   assert.equal(quotationSendPermission({ verifiedAutoSend: true, analysis: { ...ready!, confidence: 0.4, missingInformation: ["quantity"] } }), "CLARIFY");
-  assert.equal(quotationSendPermission({ verifiedAutoSend: true, analysis: null }), "EXISTING");
+  assert.equal(quotationSendPermission({ verifiedAutoSend: true, analysis: null }), "MANUAL");
 });
 
 test("a customer draft cannot carry a price, stock figure, or quotation number", () => {
@@ -161,4 +161,21 @@ test("a parsed email keeps its requirement, and a grounded interpretation fills 
   const filled = requirementsForSourcing("", grounded);
   assert.equal(filled[0]?.model.toLowerCase().includes("thinkpad e14"), true);
   assert.equal(filled[0]?.quantity, 2);
+  const mixed = "Please quote 2 x Lenovo ThinkPad E14. Also include the USB-C dock.";
+  const both = requirementsForSourcing(mixed, groundRfqAnalysis(parseRfqAnalysis({
+    classification: "RFQ",
+    customerIntent: "Quote",
+    items: [
+      { quantity: 2, category: "Laptop", brand: "Lenovo", model: "ThinkPad E14", specifications: [], mandatorySpecifications: [], preferences: [], uncertainties: [], sku: "", mpn: "" },
+      { quantity: null, category: "Dock", brand: "", model: "", specifications: ["USB-C"], mandatorySpecifications: ["USB-C"], preferences: [], uncertainties: ["Quantity was not stated for the dock."], sku: "", mpn: "" },
+    ],
+    missingInformation: [],
+    uncertainties: [],
+    sufficientToQuote: false,
+    recommendedAction: "SOURCE_PRODUCT",
+    confidence: 0.9,
+    responseDraft: "",
+  })!, mixed));
+  assert.equal(both.some((item) => item.model.toLowerCase().includes("thinkpad") && item.quantity === 2), true);
+  assert.equal(both.some((item) => item.productType === "Dock"), true);
 });

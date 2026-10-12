@@ -64,6 +64,7 @@ export type SourcingCandidate = {
   fresh: boolean;
   checkedAt: string | null;
   reputable: boolean;
+  vatKnown?: boolean;
   supplierClass?: SupplierClass;
   leadTimeDays?: number | null;
 };
@@ -636,6 +637,7 @@ function fillRequirement(primary: ProductRequirement, extra: ProductRequirement)
 }
 
 function canPrice(candidate: SourcingCandidate) {
+  if (candidate.vatKnown === false) return false;
   if ((candidate.costExVatCents ?? 0) > 0) return true;
   return (candidate.listedPriceCents ?? 0) > 0 && (candidate.sourceKind === "URBAN_FOCUS_CATALOGUE" || candidate.sourceKind === "EXTERNAL_SOURCE");
 }

@@ -7,11 +7,9 @@ import {
   currentCustomerText,
   extractRfqRequest,
   factualReply,
-  groundAiRfqExtraction,
   isQuotationRequest,
   matchesKnownSupplier,
   matchRfqLine,
-  mergeRfqExtraction,
   priceQuotation,
   type CatalogueHit,
   type InboundKind,
@@ -23,10 +21,10 @@ import { getDb, isUniqueViolation } from "../lib/db";
 import { AppError } from "../lib/errors";
 import { classFromScorecard, SCORECARD_FIELD_SELECT, supplierClassRank } from "../lib/supplier-scorecard";
 import { recordActivity } from "./activity-service";
-import { extractQuotationFields } from "./ai-service";
+import { assistProductSelection, selectionIsNeeded } from "../lib/ai/product-evidence";
 import { sendQuote } from "./quote-service";
 import { sendCustomerResponse } from "./reply-service";
-import { catalogueCommercialState, extractProductRequirements, planSourcing, requirementAwaitingQuantity, requirementSummary, requirementsFromSources, type ProductRequirement, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
+import { catalogueCommercialState, extractProductRequirements, planSourcing, requirementAwaitingQuantity, requirementSummary, type ProductRequirement, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
 import { sourceExternalForRequirements } from "./external-sourcing-service";
 import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp, unpricedCatalogueNote } from "./sales-response-service";
 import { analyseRfqDocuments, analysisTextForRfq, listTenderAnalyses, responseModeForRfq, saveAnalysisMatches } from "./document-analysis-service";
@@ -34,7 +32,7 @@ import { matchRequestedSpecification, UNPRICED_LINE, type AnalysisMatch } from "
 import { determineInitialResponse, inboundIsHistorical, sendResponseOnce, customerResponseAllowed, threadCustomerAction, type InitialResponse, type ProcessingRow, type ProcessingStore, type ResponseFacts } from "../lib/inbound-response";
 import { asksToProceed, requestStrictness } from "../lib/rfq-match";
 import { retryDelayMs } from "../lib/quote-send";
-import { analyzeInboundEmail, parseRfqAnalysis, type RfqAnalysis } from "../lib/ai/rfq-analyzer";
+import { analyzeInboundEmail, logAiUse, parseRfqAnalysis, type RfqAnalysis } from "../lib/ai/rfq-analyzer";
 import { requirementsForSourcing } from "../lib/ai/rfq-requirements";
 import { generateQuotePdf } from "./quotation-pdf-service";
 
@@ -183,7 +181,7 @@ async function processInboundMessage(messageId: string) {
     if (!delivery.blocked || delivery.finished) await db.message.update({ where: { id: message.id }, data: { automationAt: new Date() } });
     return delivery.blocked ? "already-replied" : kind;
   }
-  const rfq = await createRfq(message, await analyzeInboundEmail({ subject: message.subject, body: message.body }));
+  const rfq = await createRfq(message, null);
   const documentMode = await analyseRfqDocuments(message.workspaceId, rfq.id);
   const outcome = documentMode === "TENDER_PACKAGE"
     ? await quoteRfq(rfq.id, workspace, { notify: false })
@@ -320,27 +318,22 @@ async function handleQuoteReply(message: { id: string; workspaceId: string; body
 
 async function extractInboundRfq(body: string, analysis: RfqAnalysis | null) {
   const extracted = extractRfqRequest(body);
-  if (extracted.lines.length > 0) return extracted;
-  if (analysis) {
-    return mergeRfqExtraction(extracted, groundAiRfqExtraction({
-      lines: analysis.items.map((item) => ({
-        description: item.description,
-        quantity: item.quantity,
-        manufacturer: item.brand,
-        model: item.model,
-        sku: item.sku,
-        manufacturerPartNumber: item.mpn,
-        specifications: item.specifications.join(", "),
-      })),
-    }, body));
-  }
-  try {
-    const raw = await extractQuotationFields(body);
-    if (!raw) return extracted;
-    return mergeRfqExtraction(extracted, groundAiRfqExtraction(raw, body));
-  } catch {
-    return extracted;
-  }
+  if (!analysis || analysis.items.length === 0) return extracted;
+  const lines = requirementsForSourcing(body, analysis).flatMap((requirement) => {
+    if (requirement.quantity == null) return [];
+    const description = (requirement.requestedText.split(/\r?\n/).find((line) => line.trim()) || requirement.model || requirement.productType).slice(0, 300);
+    if (description.length < 2) return [];
+    return [{
+      description,
+      quantity: requirement.quantity,
+      manufacturer: requirement.brandPreference,
+      model: requirement.model,
+      sku: requirement.sku,
+      manufacturerPartNumber: requirement.mpn,
+      specifications: requirement.requestedText.slice(0, 300),
+    }];
+  });
+  return lines.length > 0 ? { ...extracted, lines } : extracted;
 }
 
 async function createRfq(message: { id: string; workspaceId: string; subject: string; body: string; fromEmail: string | null; fromName: string | null; prospectId: string | null; threadId?: string | null }, analysis: RfqAnalysis | null) {
@@ -502,14 +495,23 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     include: { lines: true, quotes: true, sourceMessage: true },
   });
   if (!rfq || (!options?.revise && rfq.quotes.some((quote) => quote.status === "SENT"))) return none;
-  const analysis = await rememberAiInterpretation(rfq);
   const documentText = await analysisTextForRfq(rfq.id);
   const threadText = await inboundThreadText(rfq);
-  const parsed = requirementsFromSources(threadText, documentText);
-  const requirements = parsed.length > 0 ? parsed : requirementsForSourcing(threadText, analysis);
+  const source = `${threadText}\n${documentText}`.trim().slice(0, 12000);
+  const analysis = await rememberAiInterpretation(rfq, source);
+  const requirements = requirementsForSourcing(source, analysis);
   await db.rfq.update({ where: { id: rfq.id }, data: { status: "PARSING" } });
-  await recordRfqEvent(workspace.id, rfq.id, "EMAIL_RECEIVED", "PARSING", "Requirements are being read from the thread.");
-  await storeParsedRequirements(rfq, requirements, workspace.id);
+  await recordRfqEvent(workspace.id, rfq.id, "EMAIL_RECEIVED", "PARSING", analysis ? "OpenAI extraction is the quotation record." : "OpenAI was unavailable. The RFQ was kept for internal processing.");
+  await storeParsedRequirements(rfq, requirements, workspace.id, { authoritative: Boolean(analysis && analysis.items.length > 0) });
+  if (!analysis || analysis.items.length === 0) {
+    const note = analysis
+      ? "OpenAI did not return a grounded product list. The RFQ was kept for internal processing and was not quoted automatically."
+      : "OpenAI was unavailable. The RFQ was kept for internal processing and was not quoted automatically.";
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: note } });
+    await recordRfqEvent(workspace.id, rfq.id, "REVIEW_REQUIRED", "REVIEWING", note);
+    await openSourcingTask(workspace.id, rfq.id, note);
+    return respond({ planKind: "STAFF_REVIEW" });
+  }
   const margins = {
     minimumMarginPercent: workspace.minimumMarginPercent,
     autoQuoteMarginPercent: workspace.autoQuoteMarginPercent,
@@ -520,8 +522,40 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   const requirementsHash = createHash("sha256").update(requirements.map((requirement) => requirement.requestedText).join("\n")).digest("hex").slice(0, 16);
   await db.rfq.update({ where: { id: rfq.id }, data: { status: "MATCHING", strictness, requirementsHash } });
   await recordRfqEvent(workspace.id, rfq.id, "REQUIREMENTS_PARSED", "MATCHING", strictness || "No structured requirement.");
+  let searchedOnline = false;
+  const retrieved = [...pools.catalogue, ...pools.supplierFeeds, ...pools.supplierApis, ...pools.external];
+  if (selectionIsNeeded(requirements, retrieved)) {
+    const assisted = await assistProductSelection({
+      requirements,
+      evidence: retrieved,
+      searchOnline: async (query) => {
+        const requirement = requirements.find((item) => query.toLowerCase().includes((item.model || item.productType || item.sku).toLowerCase())) ?? requirements[0];
+        if (!requirement) return [];
+        const live = await sourceExternalForRequirements(workspace.id, [requirement], query);
+        return live.candidates;
+      },
+    });
+    searchedOnline = assisted.searched;
+    if (!assisted.ok) {
+      await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: assisted.reviewReason } });
+      await recordRfqEvent(workspace.id, rfq.id, "REVIEW_REQUIRED", "REVIEWING", assisted.reviewReason);
+      await openSourcingTask(workspace.id, rfq.id, assisted.reviewReason);
+      return respond({ planKind: "STAFF_REVIEW" });
+    }
+    const withheld = assisted.accepted.filter((candidate) => candidate.vatKnown === false && candidate.listedPriceCents);
+    if (withheld.length > 0) {
+      const note = withheld.map((candidate) => `${candidate.name} was retrieved from ${candidate.sourceUrl}. The listed amount is ${candidate.listedPriceCents} cents in ZAR. VAT treatment was not stated, so no selling price was calculated.`).join(" ");
+      await openSourcingTask(workspace.id, rfq.id, note);
+    }
+    pools = {
+      catalogue: assisted.accepted.filter((candidate) => candidate.sourceKind === "URBAN_FOCUS_CATALOGUE" && candidate.vatKnown !== false),
+      supplierFeeds: assisted.accepted.filter((candidate) => candidate.sourceKind === "SUPPLIER_FEED" && candidate.vatKnown !== false),
+      supplierApis: assisted.accepted.filter((candidate) => candidate.sourceKind === "SUPPLIER_API" && candidate.vatKnown !== false),
+      external: assisted.accepted.filter((candidate) => candidate.sourceKind === "EXTERNAL_SOURCE" && candidate.vatKnown !== false),
+    };
+  }
   let plan = planSourcing({ requirements, pools, ...margins });
-  if (plan.kind === "SOURCING") {
+  if (plan.kind === "SOURCING" && !searchedOnline) {
     const live = await sourceExternalForRequirements(workspace.id, requirements.filter((requirement) => requirement.quantity != null).slice(0, 2));
     if (live.candidates.length > 0) {
       pools = { ...pools, external: [...pools.external, ...live.candidates] };
@@ -660,16 +694,29 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   return { ...respond({ planKind: "QUOTE", planSend: true, salesAction: "AUTO_SEND" }, draft.id), quoteNotes: draft.notes };
 }
 
-async function rememberAiInterpretation(rfq: { id: string; subject: string; description: string; enquiryJson: unknown; sourceMessage: { subject: string; body: string } | null }) {
+async function rememberAiInterpretation(rfq: { id: string; subject: string; description: string; enquiryJson: unknown; sourceMessage: { subject: string; body: string } | null }, source: string) {
+  const sourceHash = createHash("sha256").update(source).digest("hex").slice(0, 16);
   const stored = storedAnalysis(rfq.enquiryJson);
-  if (stored) return stored;
-  const analysis = await analyzeInboundEmail({
-    subject: rfq.sourceMessage?.subject ?? rfq.subject,
-    body: rfq.sourceMessage?.body || rfq.description,
-  });
+  const previousHash = rfq.enquiryJson && typeof rfq.enquiryJson === "object" && !Array.isArray(rfq.enquiryJson) ? String((rfq.enquiryJson as Record<string, unknown>).aiSourceHash ?? "") : "";
+  if (stored && previousHash === sourceHash) {
+    logAiUse({ purpose: "extraction", invoked: false, success: true, reviewReason: "unchanged" });
+    return stored;
+  }
+  const analysis = await analyzeInboundEmail({ subject: "", body: source });
   if (!analysis) return null;
   const base = rfq.enquiryJson && typeof rfq.enquiryJson === "object" && !Array.isArray(rfq.enquiryJson) ? rfq.enquiryJson as Record<string, unknown> : {};
-  await getDb().rfq.update({ where: { id: rfq.id }, data: { enquiryJson: { ...base, ai: analysis } } });
+  const previousLog = Array.isArray(base.aiLog) ? base.aiLog.slice(-7) : [];
+  await getDb().rfq.update({
+    where: { id: rfq.id },
+    data: {
+      enquiryJson: {
+        ...base,
+        ai: analysis,
+        aiSourceHash: sourceHash,
+        aiLog: [...previousLog, { at: new Date().toISOString(), purpose: "extraction", success: analysis.items.length > 0, sourceHash }],
+      },
+    },
+  });
   return analysis;
 }
 
@@ -948,10 +995,15 @@ async function rememberAlternativeQuote(rfq: { id: string; lines: { id: string }
   }
 }
 
-async function storeParsedRequirements(rfq: { id: string; lines: { id: string; specifications: string }[] }, requirements: ProductRequirement[], workspaceId: string) {
+async function storeParsedRequirements(rfq: { id: string; lines: { id: string; specifications: string }[] }, requirements: ProductRequirement[], workspaceId: string, options?: { authoritative?: boolean }) {
   const useful = requirements.filter((requirement) => requirementSummary(requirement) || requirement.productType);
   if (useful.length === 0) return;
   const db = getDb();
+  if (options?.authoritative && rfq.lines.length > useful.length) {
+    const extra = rfq.lines.slice(useful.length);
+    await db.rfqLine.deleteMany({ where: { id: { in: extra.map((line) => line.id) } } });
+    rfq.lines.splice(useful.length);
+  }
   for (const [index, requirement] of useful.entries()) {
     const summary = requirementSummary(requirement) || requirement.productType;
     const quantity = requirement.quantity == null ? null : new Prisma.Decimal(requirement.quantity.toFixed(2));

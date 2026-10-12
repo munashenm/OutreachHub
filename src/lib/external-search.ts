@@ -77,26 +77,25 @@ export function rankExternalUrls(hits: SearchHit[]): RankedPage[] {
   return ranked.map(({ rank: _rank, ...page }) => page);
 }
 
-export function parseProductPage(html: string, pageUrl: string): { listing: ParsedListing | null; reason: string } {
+export type ObservedProduct = Omit<ParsedListing, "vatIncluded"> & { vatIncluded: boolean | null };
+
+export function observeProductPage(html: string, pageUrl: string): { product: ObservedProduct | null; reason: string } {
   const blocks = [...html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1] ?? "");
   const product = blocks.flatMap(readJsonLd).find((node) => node.type === "Product") ?? null;
   const name = clean(product?.name || metaContent(html, "og:title") || titleText(html));
-  if (!name) return { listing: null, reason: "The page did not name a product." };
-  if (/\b(used|refurbished|pre-?owned)\b/i.test(name)) return { listing: null, reason: "The listing is used or refurbished." };
+  if (!name) return { product: null, reason: "The page did not name a product." };
+  if (/\b(used|refurbished|pre-?owned)\b/i.test(`${name} ${pageUrl}`)) return { product: null, reason: "The listing is used or refurbished." };
   const offer = product?.offer ?? null;
   const priceText = offer?.price || metaContent(html, "product:price:amount") || visiblePrice(html);
   const listedPriceCents = zarToCents(priceText);
-  if (listedPriceCents == null) return { listing: null, reason: "The page did not state a price." };
+  if (listedPriceCents == null || listedPriceCents <= 0) return { product: null, reason: "The page did not state a price." };
   const currency = (offer?.currency || metaContent(html, "product:price:currency") || "ZAR").toUpperCase();
-  if (currency !== "ZAR") return { listing: null, reason: `The price currency is ${currency}.` };
-  const vat = vatStatus(html, offer?.vatIncluded ?? null);
-  if (vat == null) return { listing: null, reason: "The page did not state whether VAT is included." };
+  if (currency !== "ZAR") return { product: null, reason: `The price currency is ${currency}.` };
   const availability = offer?.availability || availabilityText(html);
-  if (!availability) return { listing: null, reason: "The page did not state availability." };
-  const stockQty = quantityFromAvailability(availability) ?? quantityFromText(html);
+  const stockQty = availability ? quantityFromAvailability(availability) ?? quantityFromText(html) : null;
   const specifications = clean([product?.description, name].filter(Boolean).join("\n"));
   return {
-    listing: {
+    product: {
       name,
       brand: clean(product?.brand || ""),
       model: clean(product?.model || name),
@@ -104,13 +103,21 @@ export function parseProductPage(html: string, pageUrl: string): { listing: Pars
       mpn: clean(product?.mpn || ""),
       specifications,
       listedPriceCents,
-      vatIncluded: vat,
+      vatIncluded: vatStatus(html, offer?.vatIncluded ?? null),
       availability,
       stockQty,
       currency,
     },
     reason: "",
   };
+}
+
+export function parseProductPage(html: string, pageUrl: string): { listing: ParsedListing | null; reason: string } {
+  const observed = observeProductPage(html, pageUrl);
+  if (!observed.product) return { listing: null, reason: observed.reason };
+  if (observed.product.vatIncluded == null) return { listing: null, reason: "The page did not state whether VAT is included." };
+  if (!observed.product.availability) return { listing: null, reason: "The page did not state availability." };
+  return { listing: { ...observed.product, vatIncluded: observed.product.vatIncluded }, reason: "" };
 }
 
 export function listingRejection(requirement: ProductRequirement, listing: ParsedListing, pageUrl: string) {
@@ -210,7 +217,8 @@ function availabilityText(html: string) {
   const stock = html.match(/\b(\d+)\s+(?:in stock|available)\b/i);
   if (stock) return stock[0];
   if (/\bout of stock\b/i.test(html)) return "OutOfStock";
-  if (/\bin stock\b/i.test(html)) return "InStock";
+  const withoutForecast = html.replace(/\bexpected to be in stock\b/gi, " ");
+  if (/\bin stock\b/i.test(withoutForecast)) return "InStock";
   return "";
 }
 

@@ -14,13 +14,13 @@ import { assertPublicHttpsUrl } from "../lib/stock";
 
 const PAGE_LIMIT = 4;
 
-export async function sourceExternalForRequirements(workspaceId: string, requirements: ProductRequirement[]) {
+export async function sourceExternalForRequirements(workspaceId: string, requirements: ProductRequirement[], queryOverride = "") {
   const provider = configuredSearchProvider(process.env);
   if (!provider) return { candidates: [] as SourcingCandidate[], dependency: SEARCH_PROVIDER_DEPENDENCY, note: SEARCH_PROVIDER_DEPENDENCY };
   const candidates: SourcingCandidate[] = [];
   const notes: string[] = [];
   for (const requirement of requirements) {
-    const query = externalSearchQuery(requirement);
+    const query = queryOverride.trim() || externalSearchQuery(requirement);
     let hits: SearchHit[] = [];
     try {
       hits = await searchWeb(provider, query);
