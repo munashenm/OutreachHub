@@ -67,6 +67,7 @@ export type QuotationLineInput = {
   matchGrade: string;
   costStatus: string;
   sourceUrl?: string;
+  sourceKind?: string;
   scheduleNumber?: string;
 };
 
@@ -181,6 +182,32 @@ export function quotationTotals(lines: { quantity: number; unitPriceCents: numbe
   return { subtotalExclCents, vatCents, totalInclCents: subtotalExclCents + vatCents };
 }
 
+/** Urban Focus shelf prices already include VAT. The quotation shows the exclusive portion and adds the included VAT back to the same shelf total. */
+function urbanFocusExclusiveUnitCents(inclusiveCents: number) {
+  if (!Number.isInteger(inclusiveCents) || inclusiveCents <= 0) return inclusiveCents;
+  return Math.round((inclusiveCents * 100) / (100 + VAT_RATE));
+}
+
+function quotationAmounts(lines: QuotationLineInput[]) {
+  const catalogue = lines.filter((line) => line.sourceKind === "URBAN_FOCUS_CATALOGUE");
+  const other = lines.filter((line) => line.sourceKind !== "URBAN_FOCUS_CATALOGUE");
+  let catalogueExcl = 0;
+  let catalogueVat = 0;
+  for (const line of catalogue) {
+    const exclusiveUnit = urbanFocusExclusiveUnitCents(line.unitPriceCents);
+    const exclusive = lineTotalCents(line.quantity, exclusiveUnit);
+    const inclusive = Math.round(line.quantity * line.unitPriceCents);
+    if (exclusive == null || !Number.isSafeInteger(inclusive)) return null;
+    catalogueExcl += exclusive;
+    catalogueVat += inclusive - exclusive;
+  }
+  const otherTotals = other.length === 0 ? { subtotalExclCents: 0, vatCents: 0, totalInclCents: 0 } : quotationTotals(other);
+  if (!otherTotals || !Number.isSafeInteger(catalogueExcl + otherTotals.subtotalExclCents)) return null;
+  const subtotalExclCents = catalogueExcl + otherTotals.subtotalExclCents;
+  const vatCents = catalogueVat + otherTotals.vatCents;
+  return { subtotalExclCents, vatCents, totalInclCents: subtotalExclCents + vatCents };
+}
+
 export function buildQuotationDocument(input: {
   mode: "STANDARD" | "FORMAL";
   exportQuote: boolean;
@@ -208,7 +235,7 @@ export function buildQuotationDocument(input: {
     reason: line.specifications || "No verified source has been found yet.",
     sourceUrl: line.sourceUrl ?? "",
   }));
-  const totals = quotationTotals(pricedLines) ?? (pricedLines.length === 0 ? { subtotalExclCents: 0, vatCents: 0, totalInclCents: 0 } : null);
+  const totals = quotationAmounts(pricedLines) ?? (pricedLines.length === 0 ? { subtotalExclCents: 0, vatCents: 0, totalInclCents: 0 } : null);
   if (!totals) throw new Error("The quotation totals could not be calculated.");
   const numberLabel = input.sequence == null ? "" : displayedQuoteNumber(input.sequence, input.issuedAt, input.storedFilename ?? "");
   const filename = input.sequence == null ? "quotation.pdf" : quotePdfFilename(input.sequence, input.issuedAt, input.storedFilename ?? "");
@@ -256,8 +283,8 @@ export function buildQuotationDocument(input: {
         configuration: shortConfiguration(formatted.detail),
         identity: formatted.identifier,
         quantity: line.quantity,
-        unitPriceCents: line.unitPriceCents,
-        lineTotalCents: lineTotalCents(line.quantity, line.unitPriceCents) ?? 0,
+        unitPriceCents: line.sourceKind === "URBAN_FOCUS_CATALOGUE" ? urbanFocusExclusiveUnitCents(line.unitPriceCents) : line.unitPriceCents,
+        lineTotalCents: lineTotalCents(line.quantity, line.sourceKind === "URBAN_FOCUS_CATALOGUE" ? urbanFocusExclusiveUnitCents(line.unitPriceCents) : line.unitPriceCents) ?? 0,
         scheduleNumber: line.scheduleNumber?.trim() || String(index + 1),
       };
     }),

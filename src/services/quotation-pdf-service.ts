@@ -102,6 +102,7 @@ export async function generateQuotePdf(workspaceId: string, quoteId: string, opt
       requirementText: line.requirementText || quote.rfq.lines[index]?.specifications || quote.rfq.lines[index]?.description || "",
       matchGrade: line.matchGrade,
       costStatus: line.costStatus,
+      sourceKind: line.sourceKind,
       sourceUrl: line.sourceUrl,
       scheduleNumber: line.scheduleNumber,
     })),

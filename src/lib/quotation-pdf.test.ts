@@ -58,6 +58,68 @@ function document(mode: "STANDARD" | "FORMAL", exportQuote = false) {
   });
 }
 
+test("an Urban Focus shelf price includes VAT once, including for more than one unit", () => {
+  const shelf = {
+    description: "Port Yosemite Eco Grey 14\" Backpack",
+    quantity: 1,
+    unitPriceCents: 65_000,
+    specifications: "",
+    sku: "400702",
+    modelName: "Port Yosemite Eco Grey 14\" Backpack",
+    manufacturerPartNumber: "",
+    availability: "41 available",
+    leadTime: "Subject to stock",
+    warranty: "12-month warranty",
+    requirementText: "Port Yosemite Eco Grey 14\" Backpack",
+    matchGrade: "EXACT",
+    costStatus: "NEEDS_REVIEW",
+    sourceKind: "URBAN_FOCUS_CATALOGUE",
+  };
+  const one = buildQuotationDocument({
+    mode: "STANDARD",
+    exportQuote: false,
+    sequence: 1,
+    issuedAt,
+    validUntil,
+    currency: "ZAR",
+    customerCompany: "Verification",
+    contactName: "Internal check",
+    email: "sales@urbanfocus.co.za",
+    customerReference: "LIVE-API-CHECK",
+    deliveryLocation: "Centurion",
+    subject: "Backpack",
+    company: defaultQuoteCompanySettings(),
+    lines: [shelf],
+    references: [],
+  });
+  assert.equal(one.lines[0]?.unitPriceCents, 56_522);
+  assert.equal(one.subtotalExclCents, 56_522);
+  assert.equal(one.vatCents, 8_478);
+  assert.equal(one.totalInclCents, 65_000);
+  const two = buildQuotationDocument({
+    mode: "STANDARD",
+    exportQuote: false,
+    sequence: 1,
+    issuedAt,
+    validUntil,
+    currency: "ZAR",
+    customerCompany: "Verification",
+    contactName: "Internal check",
+    email: "sales@urbanfocus.co.za",
+    customerReference: "LIVE-API-CHECK",
+    deliveryLocation: "Centurion",
+    subject: "Backpack",
+    company: defaultQuoteCompanySettings(),
+    lines: [{ ...shelf, quantity: 3 }],
+    references: [],
+  });
+  assert.equal(two.lines[0]?.unitPriceCents, 56_522);
+  assert.equal(two.lines[0]?.lineTotalCents, 169_566);
+  assert.equal(two.subtotalExclCents, 169_566);
+  assert.equal(two.vatCents, 25_434);
+  assert.equal(two.totalInclCents, 195_000);
+});
+
 test("prices a two-line quotation from the snapshot and keeps supplier data out", () => {
   const totals = quotationTotals([
     { quantity: 2, unitPriceCents: 1_000_000 },

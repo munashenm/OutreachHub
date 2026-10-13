@@ -84,7 +84,7 @@ export function urbanFocusCandidate(product: ParsedStoreProduct, checkedAt: stri
     specifications: [product.specifications, product.description, product.name].filter(Boolean).join("\n"),
     costExVatCents: product.costExVatCents,
     listedPriceCents: listed > 0 ? listed : null,
-    vatIncluded: false,
+    vatIncluded: true,
     shippingCents: 0,
     procurementCents: 0,
     importCents: 0,
