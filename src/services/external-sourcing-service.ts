@@ -8,6 +8,9 @@ import {
   observeProductPage,
   parseProductPage,
   rankExternalUrls,
+  type ObservedProduct,
+  type ParsedListing,
+  type RankedPage,
   type SearchHit,
 } from "../lib/external-search";
 import { logAiUse } from "../lib/ai/rfq-analyzer";
@@ -55,11 +58,18 @@ export async function sourceExternalForRequirements(workspaceId: string, require
           const observed = observeProductPage(html, page.url);
           const listed = observed.product?.listedPriceCents;
           notes.push(listed ? `Evidence ${observed.product?.name} at ${page.url}: listed ${listed} cents ZAR. ${parsed.reason} No selling price was calculated.` : `Rejected ${page.url}: ${parsed.reason}`);
+          if (observed.product) candidates.push(heldCandidate(page, observed.product, parsed.reason, false));
           continue;
         }
         const reason = listingRejection(requirement, parsed.listing, page.url);
+        if (reason.startsWith("hold:")) {
+          notes.push(`Evidence ${parsed.listing.name} at ${page.url}: ${reason.slice(5).trim()} No selling price was calculated.`);
+          candidates.push(heldCandidate(page, parsed.listing, reason.slice(5).trim(), true));
+          continue;
+        }
         if (reason) {
           notes.push(`Rejected ${parsed.listing.name}: ${reason}`);
+          if (/does not meet/i.test(reason)) candidates.push(heldCandidate(page, parsed.listing, reason, true));
           continue;
         }
         const checkedAt = new Date();
@@ -99,6 +109,36 @@ export async function sourceExternalForRequirements(workspaceId: string, require
   }
   const note = notes.join("\n").slice(0, 2000) || "External search returned no usable product.";
   return { candidates, dependency: candidates.length > 0 ? null : note, note };
+}
+
+function heldCandidate(page: RankedPage, listing: ParsedListing | ObservedProduct, reason: string, vatKnown: boolean): SourcingCandidate {
+  return {
+    sourceKind: "EXTERNAL_SOURCE",
+    sourceName: page.sourceName,
+    sourceUrl: page.url,
+    sourceType: page.sourceType,
+    productId: null,
+    name: listing.name,
+    brand: listing.brand,
+    model: listing.model,
+    sku: listing.sku,
+    mpn: listing.mpn,
+    specifications: `${listing.specifications}\n${reason}`.slice(0, 2000),
+    costExVatCents: null,
+    listedPriceCents: listing.listedPriceCents,
+    vatIncluded: listing.vatIncluded === true,
+    shippingCents: 0,
+    procurementCents: 0,
+    importCents: 0,
+    riskPercent: 0,
+    markupPercent: 0,
+    stockQty: null,
+    stockKnown: false,
+    fresh: true,
+    checkedAt: new Date().toISOString(),
+    reputable: true,
+    vatKnown,
+  };
 }
 
 function candidateFromOffer(saved: { sourceName: string; sourceUrl: string; productName: string; brand: string; model: string; sku: string; mpn: string; specifications: string; listedPriceCents: number; vatIncluded: boolean; shippingCents?: number; stockQty: number | null; checkedAt: Date }, sourceType: SourcingCandidate["sourceType"] = "RETAILER"): SourcingCandidate {

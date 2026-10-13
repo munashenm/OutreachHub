@@ -92,6 +92,48 @@ test("specification RFQ finds a model that meets the request", () => {
   assert.equal(plan.options.some((option) => option.name === "Basic laptop"), false);
 });
 
+test("the mixed office verification keeps both quantities and can price a verified printer", () => {
+  const requirements = extractProductRequirements(`Please provide a quotation for the following items:
+1. 3 × A3 duplex multifunction printers, minimum print speed 30 ppm, network connectivity and automatic document feeder.
+2. 2 × wireless industrial 2D barcode scanners, IP65 protection or better, suitable for warehouse use.`);
+  assert.equal(requirements.length, 2);
+  assert.equal(requirements[0]?.quantity, 3);
+  assert.equal(requirements[0]?.productType, "Printer");
+  assert.equal(requirements[1]?.quantity, 2);
+  assert.equal(requirements[1]?.productType, "Scanner");
+  const printer = candidate({
+    sourceKind: "EXTERNAL_SOURCE",
+    sourceType: "RETAILER",
+    sourceName: "Incredible Connection",
+    sourceUrl: "https://www.incredible.co.za/brother-mfc",
+    name: "Brother MFC-J6940DW A3 duplex printer",
+    model: "MFC-J6940DW",
+    sku: "MFCJ6940DW",
+    specifications: "A3 duplex colour printer, 35 ppm",
+    costExVatCents: null,
+    listedPriceCents: 1_899_900,
+    vatIncluded: true,
+    stockQty: 6,
+    checkedAt: now.toISOString(),
+    productId: null,
+  });
+  assert.equal(compareRequirement(requirements[0]!, printer), "EXCEEDS_REQUIREMENT");
+  const plan = planSourcing({
+    requirements,
+    pools: { ...emptyPools(), external: [printer] },
+    ...margins,
+    now,
+  });
+  assert.equal(plan.kind, "QUOTE");
+  if (plan.kind !== "QUOTE") return;
+  assert.equal(plan.send, false);
+  assert.equal(plan.options.length, 1);
+  assert.equal(plan.options[0]?.quantity, 3);
+  assert.equal(plan.outstanding.length, 1);
+  assert.equal(plan.outstanding[0]?.quantity, 2);
+  assert.match(plan.outstanding[0]?.label ?? "", /scanner/i);
+});
+
 test("a named laptop is not quoted as a larger unrelated product", () => {
   const [requirement] = extractProductRequirements("Please quote 2 x Lenovo ThinkPad E14.");
   const panel = candidate({

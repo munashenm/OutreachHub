@@ -66,6 +66,7 @@ export type QuotationLineInput = {
   requirementText: string;
   matchGrade: string;
   costStatus: string;
+  sourceUrl?: string;
   scheduleNumber?: string;
 };
 
@@ -205,7 +206,7 @@ export function buildQuotationDocument(input: {
     label: line.description,
     quantity: line.quantity,
     reason: line.specifications || "No verified source has been found yet.",
-    sourceUrl: "",
+    sourceUrl: line.sourceUrl ?? "",
   }));
   const totals = quotationTotals(pricedLines) ?? (pricedLines.length === 0 ? { subtotalExclCents: 0, vatCents: 0, totalInclCents: 0 } : null);
   if (!totals) throw new Error("The quotation totals could not be calculated.");

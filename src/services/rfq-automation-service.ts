@@ -24,7 +24,7 @@ import { recordActivity } from "./activity-service";
 import { assistProductSelection, selectionIsNeeded } from "../lib/ai/product-evidence";
 import { sendQuote } from "./quote-service";
 import { sendCustomerResponse } from "./reply-service";
-import { catalogueCommercialState, extractProductRequirements, planSourcing, requirementAwaitingQuantity, requirementSummary, type ProductRequirement, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
+import { catalogueCommercialState, extractProductRequirements, planSourcing, requirementAwaitingQuantity, requirementSummary, type OutstandingItem, type ProductRequirement, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
 import { sourceExternalForRequirements } from "./external-sourcing-service";
 import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp, unpricedCatalogueNote } from "./sales-response-service";
 import { analyseRfqDocuments, analysisTextForRfq, listTenderAnalyses, responseModeForRfq, saveAnalysisMatches } from "./document-analysis-service";
@@ -468,6 +468,36 @@ async function recordRfqEvent(workspaceId: string, rfqId: string, type: string, 
   await getDb().rfqEvent.create({ data: { workspaceId, rfqId, type, status, reason: reason.slice(0, 500) } });
 }
 
+async function recordOutstandingQuotation(workspaceId: string, rfq: { id: string; customerReference: string; quotes: { id: string; status: string }[] }, items: OutstandingItem[], note: string) {
+  const db = getDb();
+  let draft = rfq.quotes.find((quote) => quote.status === "DRAFT");
+  if (!draft) {
+    draft = await db.quote.create({ data: { workspaceId, rfqId: rfq.id, confidenceScore: 0, notes: rfq.customerReference ? `Customer reference ${rfq.customerReference}` : "" } });
+  } else {
+    await db.quoteLine.deleteMany({ where: { quoteId: draft.id } });
+  }
+  for (const item of items) {
+    const quantity = item.quantity && item.quantity > 0 ? item.quantity : 1;
+    await db.quoteLine.create({
+      data: {
+        workspaceId,
+        quoteId: draft.id,
+        description: item.label.slice(0, 500),
+        quantity: new Prisma.Decimal(quantity.toFixed(2)),
+        unitPriceCents: 0,
+        specifications: item.reason.slice(0, 2000),
+        requirementText: item.requestedText.slice(0, 2000),
+        sourceUrl: item.sourceUrl,
+        costStatus: "OUTSTANDING",
+        availability: "Not quoted",
+      },
+    });
+  }
+  await generateQuotePdf(workspaceId, draft.id);
+  await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: note, quoteBlockedReason: note } });
+  await recordRfqEvent(workspaceId, rfq.id, "REVIEW_REQUIRED", "REVIEWING", note);
+}
+
 async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPercent: number; autoQuoteMarginPercent: number; autoSendMarginPercent: number }, options?: { notify?: boolean; revise?: boolean }): Promise<InitialResponse & { quoteId: string; quoteNotes: string }> {
   const notify = options?.notify !== false;
   const none = { decision: "NO_RESPONSE" as const, autoReplyType: "NONE" as const, message: "", quoteId: "", quoteNotes: "" };
@@ -525,34 +555,40 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   let searchedOnline = false;
   const retrieved = [...pools.catalogue, ...pools.supplierFeeds, ...pools.supplierApis, ...pools.external];
   if (selectionIsNeeded(requirements, retrieved)) {
+    const unmatchedRequirements = [...requirements];
     const assisted = await assistProductSelection({
       requirements,
       evidence: retrieved,
       searchOnline: async (query) => {
-        const requirement = requirements.find((item) => query.toLowerCase().includes((item.model || item.productType || item.sku).toLowerCase())) ?? requirements[0];
+        const marker = (item: ProductRequirement) => (item.productType || item.model || item.sku).toLowerCase();
+        const index = unmatchedRequirements.findIndex((item) => {
+          const name = marker(item);
+          return name.length >= 4 && query.toLowerCase().includes(name);
+        });
+        const requirement = index >= 0 ? unmatchedRequirements.splice(index, 1)[0] : unmatchedRequirements.shift();
         if (!requirement) return [];
         const live = await sourceExternalForRequirements(workspace.id, [requirement], query);
         return live.candidates;
       },
     });
     searchedOnline = assisted.searched;
-    if (!assisted.ok) {
-      await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: assisted.reviewReason } });
-      await recordRfqEvent(workspace.id, rfq.id, "REVIEW_REQUIRED", "REVIEWING", assisted.reviewReason);
-      await openSourcingTask(workspace.id, rfq.id, assisted.reviewReason);
-      return respond({ planKind: "STAFF_REVIEW" });
+    if (!assisted.ok) await openSourcingTask(workspace.id, rfq.id, assisted.reviewReason);
+    if (assisted.ok && assisted.accepted.length > 0) {
+      pools = {
+        catalogue: assisted.accepted.filter((candidate) => candidate.sourceKind === "URBAN_FOCUS_CATALOGUE" && candidate.vatKnown !== false),
+        supplierFeeds: assisted.accepted.filter((candidate) => candidate.sourceKind === "SUPPLIER_FEED" && candidate.vatKnown !== false),
+        supplierApis: assisted.accepted.filter((candidate) => candidate.sourceKind === "SUPPLIER_API" && candidate.vatKnown !== false),
+        external: assisted.accepted.filter((candidate) => candidate.sourceKind === "EXTERNAL_SOURCE" && candidate.vatKnown !== false),
+      };
     }
+    const seenSources = new Set(pools.external.map((candidate) => candidate.sourceUrl).filter(Boolean));
+    const added = assisted.retrieved.filter((candidate) => !candidate.sourceUrl || !seenSources.has(candidate.sourceUrl));
+    if (added.length > 0) pools = { ...pools, external: [...pools.external, ...added] };
     const withheld = assisted.accepted.filter((candidate) => candidate.vatKnown === false && candidate.listedPriceCents);
     if (withheld.length > 0) {
       const note = withheld.map((candidate) => `${candidate.name} was retrieved from ${candidate.sourceUrl}. The listed amount is ${candidate.listedPriceCents} cents in ZAR. VAT treatment was not stated, so no selling price was calculated.`).join(" ");
       await openSourcingTask(workspace.id, rfq.id, note);
     }
-    pools = {
-      catalogue: assisted.accepted.filter((candidate) => candidate.sourceKind === "URBAN_FOCUS_CATALOGUE" && candidate.vatKnown !== false),
-      supplierFeeds: assisted.accepted.filter((candidate) => candidate.sourceKind === "SUPPLIER_FEED" && candidate.vatKnown !== false),
-      supplierApis: assisted.accepted.filter((candidate) => candidate.sourceKind === "SUPPLIER_API" && candidate.vatKnown !== false),
-      external: assisted.accepted.filter((candidate) => candidate.sourceKind === "EXTERNAL_SOURCE" && candidate.vatKnown !== false),
-    };
   }
   let plan = planSourcing({ requirements, pools, ...margins });
   if (!searchedOnline) {
@@ -622,6 +658,10 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     return respond({ planKind: "SOURCING", catalogueProductNamed: true, salesAction: sales.action === "ALTERNATIVES" ? "ALTERNATIVES" : "PREPARE", salesMessage: sales.message });
   }
   if (plan.kind === "SOURCING") {
+    if (plan.outstanding && plan.outstanding.length > 0) {
+      await recordOutstandingQuotation(workspace.id, rfq, plan.outstanding, plan.note);
+      return respond({ planKind: "SOURCING", planMessage: plan.message });
+    }
     if (sales?.action === "EXTERNAL_TASK") await openSourcingTask(workspace.id, rfq.id, requirement?.requestedText || rfq.subject);
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "SOURCING", automationNote: plan.note, quoteBlockedReason: plan.note } });
     await recordRfqEvent(workspace.id, rfq.id, "SOURCING_STARTED", "SOURCING", plan.note);

@@ -69,7 +69,8 @@ export function externalSearchQuery(requirement: ProductRequirement) {
     requirement.operatingSystem,
     requirement.screenInches ? `${requirement.screenInches} inch` : "",
   ].filter(Boolean);
-  if (described.length > 0) return `${described.join(" ")} South Africa`;
+  const computerSpec = Boolean(requirement.processor || requirement.ramGb || requirement.storageGb || requirement.operatingSystem || requirement.screenInches);
+  if (computerSpec && described.length > 0) return `${described.join(" ")} South Africa`;
   const words = requirement.requestedText.replace(/\b(please|kindly|also|quote|quotation|for|the|and|of|a|an)\b/gi, " ").replace(/\s+/g, " ").trim();
   return `${words || "product"} South Africa`.slice(0, 160);
 }
@@ -176,10 +177,11 @@ export function listingRejection(requirement: ProductRequirement, listing: Parse
     checkedAt: new Date().toISOString(),
     reputable: true,
   });
-  if (grade === "DOES_NOT_MEET" || grade === "PARTIAL") return `The product is ${grade.replaceAll("_", " ").toLowerCase()}.`;
+  if (grade === "DOES_NOT_MEET") return `The product is ${grade.replaceAll("_", " ").toLowerCase()}.`;
   const quantity = Math.max(1, requirement.quantity ?? 1);
-  if (listing.stockQty == null) return "Availability does not state a quantity.";
-  if (listing.stockQty < quantity) return `Only ${listing.stockQty} are available.`;
+  if (grade === "PARTIAL") return "hold: A mandatory specification was not confirmed on the page.";
+  if (listing.stockQty == null) return "hold: Availability does not state a quantity.";
+  if (listing.stockQty < quantity) return `hold: Only ${listing.stockQty} are available.`;
   return "";
 }
 

@@ -105,7 +105,7 @@ export type OutstandingItem = {
 
 export type SourcingPlan =
   | { kind: "CLARIFICATION"; message: string }
-  | { kind: "SOURCING"; message: string; note: string }
+  | { kind: "SOURCING"; message: string; note: string; outstanding?: OutstandingItem[] }
   | { kind: "STAFF_REVIEW"; note: string }
   | { kind: "QUOTE"; send: boolean; note: string; options: PricedSource[]; outstanding: OutstandingItem[] };
 
@@ -146,7 +146,7 @@ export function emptyRequirement(requestedText = ""): ProductRequirement {
 }
 
 const ACCESSORY_TYPES = new Set(["Power supply", "Charger", "Adapter", "Cable", "Dock"]);
-const QUANTITY_NOUN = "laptop\\s+power\\s+supplies|laptop\\s+power\\s+supply|laptop\\s+chargers?|power\\s+supplies|power\\s+supply|chargers?|adapters?|cables?|docks?|laptops?|notebooks?|workstations?|servers?|switches?|monitors?|printers?|desks?|chairs?";
+const QUANTITY_NOUN = "laptop\\s+power\\s+supplies|laptop\\s+power\\s+supply|laptop\\s+chargers?|power\\s+supplies|power\\s+supply|chargers?|adapters?|cables?|docks?|laptops?|notebooks?|workstations?|servers?|switches?|monitors?|barcode\\s+scanners?|scanners?|printers?|desks?|chairs?";
 
 export function extractProductRequirements(body: string): ProductRequirement[] {
   const structured = extractStructuredRequirements(body);
@@ -219,9 +219,16 @@ type QuantitySpan = { quantity: number; phrase: string; index: number; length: n
 function quantitySpans(body: string): QuantitySpan[] {
   const withoutIndexes = body.split(/\r?\n/).map((line) => line.replace(/^\s*\d+[.)]\s+/, "")).join("\n");
   const pattern = new RegExp(`\\b(\\d+)\\s*(?:x|×)?\\s+(?:(?:additional|extra|replacement|more|business|professional|office|task|ergonomic|executive|laser|colour|color|laptop)\\s+){0,3}(${QUANTITY_NOUN})\\b`, "gi");
+  const describedPattern = new RegExp(`\\b(\\d+)\\s*[x×]\\s+(?:[\\w.+-]+\\s+){0,6}?(${QUANTITY_NOUN})\\b`, "gi");
   const unitPattern = /\b(\d+)\s+units?\s+of\s+([A-Z0-9][A-Z0-9-]{3,})\b/gi;
   const found: QuantitySpan[] = [];
   for (const match of withoutIndexes.matchAll(pattern)) {
+    const quantity = boundedQuantity(Number(match[1]));
+    if (quantity == null || match.index == null || !match[2]) continue;
+    const phrase = (match[2] ?? "").replace(/\s+/g, " ").trim();
+    found.push({ quantity, phrase, index: match.index, length: match[0].length, accessory: isAccessoryPhrase(phrase) });
+  }
+  for (const match of withoutIndexes.matchAll(describedPattern)) {
     const quantity = boundedQuantity(Number(match[1]));
     if (quantity == null || match.index == null || !match[2]) continue;
     const phrase = (match[2] ?? "").replace(/\s+/g, " ").trim();
@@ -313,6 +320,7 @@ function productTypeForPhrase(phrase: string) {
   if (/\bservers?\b/i.test(phrase)) return "Server";
   if (/\bswitches?\b/i.test(phrase)) return "Switch";
   if (/\bmonitors?\b/i.test(phrase)) return "Monitor";
+  if (/\bbarcode\s+scanners?\b|\bscanners?\b/i.test(phrase)) return "Scanner";
   if (/\bprinters?\b/i.test(phrase)) return "Printer";
   if (/\bdesks?\b/i.test(phrase)) return "Desk";
   if (/\bchairs?\b/i.test(phrase)) return "Chair";
@@ -465,7 +473,11 @@ export function compareRequirement(requirement: ProductRequirement, candidate: S
   push(compareOs(requirement.operatingSystem, offered.operatingSystem));
   if (fields.includes("FAIL")) return "DOES_NOT_MEET";
   if (fields.includes("MISS")) return "PARTIAL";
-  if (fields.length === 0) return identity ? "EXACT" : "DOES_NOT_MEET";
+  if (fields.length === 0) {
+    const stated = statedCommercialGrade(requirement, candidate);
+    if (stated) return stated;
+    return identity ? "EXACT" : "DOES_NOT_MEET";
+  }
   if (identity && !fields.includes("EXCEEDS")) return "EXACT";
   if (identityRequested && !identity && screenIsTheOnlySpec(requirement)) return "DOES_NOT_MEET";
   if (fields.includes("EXCEEDS")) return "EXCEEDS_REQUIREMENT";
@@ -500,7 +512,9 @@ export function planSourcing(input: {
     const found = chooseSources(requirement, input.pools, now, freshnessMs, input);
     if (found.blocked) return { kind: "STAFF_REVIEW", note: found.blocked };
     if (found.options.length === 0) {
-      outstanding.push(outstandingItem(requirement, "No verified source has been found yet."));
+      const evidence = unmatchedEvidence(requirement, input.pools.external);
+      const item = outstandingItem(requirement, evidence?.reason ?? "No verified source has been found yet.");
+      outstanding.push(evidence ? { ...item, sourceUrl: evidence.sourceUrl, reason: evidence.reason } : item);
       continue;
     }
     const lineKey = `${requirement.productType}|${requirement.quantity ?? ""}|${requirement.model}|${requirement.sku}`;
@@ -510,7 +524,12 @@ export function planSourcing(input: {
     if (outstanding.some((item) => item.reason.startsWith("A quantity"))) {
       return { kind: "STAFF_REVIEW", note: "The specification was read. The quantity was not tied to the product, so the customer was not emailed." };
     }
-    return { kind: "SOURCING", message: SOURCING_REPLY, note: outstanding.map((item) => `${item.label}: ${item.reason}`).join(" ") || "No in-stock source meets the specification yet. Sourcing is continuing." };
+    return {
+      kind: "SOURCING",
+      message: SOURCING_REPLY,
+      note: outstanding.map((item) => `${item.label}: ${item.reason}`).join(" ") || "No in-stock source meets the specification yet. Sourcing is continuing.",
+      outstanding,
+    };
   }
   const options = collapseIdenticalOptions(priced);
   const catalogueBacked = options.every((option) => option.sourceKind !== "EXTERNAL_SOURCE");
@@ -725,6 +744,64 @@ function productTypeNameMatch(requirement: ProductRequirement, candidate: Sourci
   return `${candidate.name} ${candidate.model}`.toLowerCase().includes(noun);
 }
 
+function statedCommercialGrade(requirement: ProductRequirement, candidate: SourcingCandidate): MatchGrade | null {
+  const type = requirement.productType.toLowerCase();
+  if (!type || type === "laptop" || type === "workstation" || type === "server" || hasComparableSpecs(requirement)) return null;
+  const noun = productNoun(requirement);
+  const hay = `${candidate.name} ${candidate.model} ${candidate.specifications}`.toLowerCase();
+  const compact = hay.replace(/\s+/g, "");
+  if (!noun || !compact.includes(noun)) return "DOES_NOT_MEET";
+  const request = requirement.requestedText.toLowerCase();
+  let exceeds = false;
+  const minimumPpm = request.match(/(\d+)\s*ppm/);
+  if (minimumPpm) {
+    const wanted = Number(minimumPpm[1]);
+    const speeds = [...hay.matchAll(/(\d+)\s*ppm/g)].map((match) => Number(match[1]));
+    if (speeds.length === 0) return "PARTIAL";
+    const best = Math.max(...speeds);
+    if (best < wanted) return "DOES_NOT_MEET";
+    if (best > wanted) exceeds = true;
+  }
+  const minimumIp = request.match(/\bip\s*(\d{2})\b/);
+  if (minimumIp) {
+    const wanted = Number(minimumIp[1]);
+    const ratings = [...hay.matchAll(/\bip\s*(\d{2})\b/g)].map((match) => Number(match[1]));
+    if (ratings.length === 0) return "PARTIAL";
+    const best = Math.max(...ratings);
+    if (best < wanted) return "DOES_NOT_MEET";
+    if (best > wanted) exceeds = true;
+  }
+  if (/\b2d\b/.test(request) && type === "scanner") {
+    if (/\b1d\b/.test(hay) && !/\b2d\b/.test(hay)) return "DOES_NOT_MEET";
+    if (!/\b2d\b/.test(hay)) return "PARTIAL";
+  }
+  for (const token of specificationTokens(requirement.requestedText)) {
+    if (token.endsWith("ppm")) continue;
+    if (compact.includes(token)) continue;
+    if (/^a[0-4]$/.test(token) && /\ba[0-4]\b/.test(compact)) return "DOES_NOT_MEET";
+    return "PARTIAL";
+  }
+  return exceeds ? "EXCEEDS_REQUIREMENT" : "MEETS_REQUIREMENT";
+}
+
+function unmatchedEvidence(requirement: ProductRequirement, candidates: SourcingCandidate[]) {
+  const noun = productNoun(requirement);
+  const related = candidates.filter((candidate) => {
+    if (!candidate.sourceUrl || !noun) return false;
+    const hay = `${candidate.name} ${candidate.specifications}`.toLowerCase();
+    return hay.includes(noun);
+  });
+  const page = related.find((candidate) => compareRequirement(requirement, candidate) !== "DOES_NOT_MEET") ?? related[0];
+  if (!page) return null;
+  const grade = compareRequirement(requirement, page);
+  const listed = page.listedPriceCents ? ` Listed price ${page.listedPriceCents} cents ZAR.` : "";
+  if (grade === "DOES_NOT_MEET") return { sourceUrl: page.sourceUrl, reason: `${page.name} at ${page.sourceUrl} does not meet a mandatory specification. No selling price was calculated.` };
+  if (page.vatKnown === false) return { sourceUrl: page.sourceUrl, reason: `${page.name} is listed at ${page.sourceUrl}.${listed} VAT treatment was not stated. No selling price was calculated.`.replace(/\s+/g, " ") };
+  if (page.stockQty == null) return { sourceUrl: page.sourceUrl, reason: `${page.name} is listed at ${page.sourceUrl}.${listed} Availability does not state that ${requirement.quantity ?? "the requested quantity"} are available. No selling price was calculated.`.replace(/\s+/g, " ") };
+  if (grade === "PARTIAL") return { sourceUrl: page.sourceUrl, reason: `${page.name} at ${page.sourceUrl} does not confirm every mandatory specification. No selling price was calculated.` };
+  return { sourceUrl: page.sourceUrl, reason: `${page.name} was found at ${page.sourceUrl}.${listed} It was not used as a verified selling price.`.replace(/\s+/g, " ") };
+}
+
 function statedSpecificationMatch(requirement: ProductRequirement, candidate: SourcingCandidate) {
   const noun = productNoun(requirement);
   if (!noun || hasComparableSpecs(requirement)) return false;
@@ -735,7 +812,6 @@ function statedSpecificationMatch(requirement: ProductRequirement, candidate: So
 }
 
 function specificationMatch(requirement: ProductRequirement, candidate: SourcingCandidate) {
-  if (!hasComparableSpecs(requirement)) return false;
   const grade = compareRequirement(requirement, candidate);
   return grade === "EXACT" || grade === "MEETS_REQUIREMENT" || grade === "EXCEEDS_REQUIREMENT";
 }

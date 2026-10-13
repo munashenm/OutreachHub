@@ -127,8 +127,9 @@ export async function assistProductSelection(input: {
 }, deps?: { fetchImpl?: typeof fetch; apiKey?: string; model?: string }) {
   const cache = new Map<string, SourcingCandidate[]>();
   let evidence = [...input.evidence];
+  const retrieved: SourcingCandidate[] = [];
   const first = await selectionCall(input.requirements, evidence, deps);
-  if (!first) return { ok: false as const, accepted: [] as SourcingCandidate[], searched: false, reviewReason: "Product comparison was not confirmed. The RFQ was kept for internal review." };
+  if (!first) return { ok: false as const, accepted: [] as SourcingCandidate[], retrieved, searched: false, reviewReason: "Product comparison was not confirmed. The RFQ was kept for internal review." };
   let decisions = first.selections;
   let searched = false;
   const queries = first.searches.map((search) => search.query.trim()).filter((query) => query.length >= 3).slice(0, 2);
@@ -139,15 +140,16 @@ export async function assistProductSelection(input: {
       if (cache.has(key)) continue;
       const found = await input.searchOnline(query);
       cache.set(key, found);
+      retrieved.push(...found);
       evidence = [...evidence, ...found];
     }
     const second = await selectionCall(input.requirements, evidence, deps);
-    if (!second) return { ok: false as const, accepted: [], searched, reviewReason: "Retrieved products could not be compared. The RFQ was kept for internal review." };
+    if (!second) return { ok: false as const, accepted: [], retrieved, searched, reviewReason: "Retrieved products could not be compared. The RFQ was kept for internal review." };
     decisions = second.selections;
   }
   const accepted = applyModelSelection(input.requirements, evidence, decisions);
   logAiUse({ purpose: "selection", invoked: true, success: accepted.length > 0, reviewReason: accepted.length > 0 ? "selected" : "No retrieved product met the mandatory specification." });
-  return { ok: true as const, accepted, searched, reviewReason: accepted.length > 0 ? "" : "No retrieved product met the mandatory specification." };
+  return { ok: true as const, accepted, retrieved, searched, reviewReason: accepted.length > 0 ? "" : "No retrieved product met the mandatory specification." };
 }
 
 async function selectionCall(requirements: ProductRequirement[], evidence: SourcingCandidate[], deps?: { fetchImpl?: typeof fetch; apiKey?: string; model?: string }) {
