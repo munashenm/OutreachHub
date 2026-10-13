@@ -1,7 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyRequirement } from "./sourcing";
-import { parseUrbanFocusSearch, relevantStoreProducts, urbanFocusCandidate, urbanFocusSearchQueries, urbanFocusSupplies } from "./urban-focus-search";
+import { parseUrbanFocusSearch, relevantStoreProducts, urbanFocusCandidate, urbanFocusCatalogueHold, urbanFocusSearchQueries, urbanFocusSupplies } from "./urban-focus-search";
+
+test("a catalogue failure is held instead of being treated as no stock", () => {
+  const rejected = urbanFocusCatalogueHold({ error: new Error("The store rejected the API key.") });
+  const unavailable = urbanFocusCatalogueHold({ error: new Error("The store returned 500.") });
+  const timedOut = urbanFocusCatalogueHold({ error: new Error("The operation was aborted due to timeout") });
+  const invalid = urbanFocusCatalogueHold({ body: { error: "not a catalogue" } });
+  const missing = urbanFocusCatalogueHold({ body: null });
+  const empty = urbanFocusCatalogueHold({
+    body: { page: 1, perPage: 40, total: 0, lastPage: 1, products: [] },
+  });
+  for (const held of [rejected, unavailable, timedOut, invalid, missing]) {
+    assert.equal(typeof held, "string");
+    assert.match(held ?? "", /held/);
+    assert.doesNotMatch(held ?? "", /does not stock|not found/i);
+  }
+  assert.equal(empty, null);
+});
 
 test("builds an Urban Focus search from the requested identity and product", () => {
   const queries = urbanFocusSearchQueries([

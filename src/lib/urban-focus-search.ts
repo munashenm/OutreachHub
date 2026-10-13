@@ -24,6 +24,28 @@ export function urbanFocusSearchQueries(requirements: ProductRequirement[]) {
   }).slice(0, 8);
 }
 
+export class UrbanFocusCatalogueError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UrbanFocusCatalogueError";
+  }
+}
+
+/** A failed or unreadable catalogue response is not evidence that Urban Focus has no stock. */
+export function urbanFocusCatalogueHold(input: { error?: unknown; body?: unknown }): string | null {
+  if ("error" in input && input.error !== undefined) {
+    const message = input.error instanceof Error ? input.error.message : "";
+    if (/rejected the API key/i.test(message)) return "The Urban Focus catalogue rejected the connection. The request was held and was not quoted from another source.";
+    if (/timeout|timed out|aborted/i.test(message)) return "The Urban Focus catalogue did not respond in time. The request was held and was not quoted from another source.";
+    if (/returned \d+/i.test(message)) return "The Urban Focus catalogue returned an error. The request was held and was not quoted from another source.";
+    return "The Urban Focus catalogue could not be read. The request was held and was not quoted from another source.";
+  }
+  if (input.body == null) return "The Urban Focus catalogue did not return a search result. The request was held and was not quoted from another source.";
+  const parsed = parseUrbanFocusSearch(input.body);
+  if ("error" in parsed) return "The Urban Focus catalogue returned a response that could not be read. The request was held and was not quoted from another source.";
+  return null;
+}
+
 export function parseUrbanFocusSearch(body: unknown): ParsedStoreProduct[] | { error: string } {
   if (body && typeof body === "object" && !Array.isArray(body) && Array.isArray((body as { products?: unknown }).products) && !("page" in (body as object))) {
     const products = (body as { products: unknown[] }).products;

@@ -118,6 +118,46 @@ test("an Urban Focus shelf price includes VAT once, including for more than one 
   assert.equal(two.subtotalExclCents, 169_566);
   assert.equal(two.vatCents, 25_434);
   assert.equal(two.totalInclCents, 195_000);
+  const ten = buildQuotationDocument({
+    mode: "STANDARD",
+    exportQuote: false,
+    sequence: 1,
+    issuedAt,
+    validUntil,
+    currency: "ZAR",
+    customerCompany: "Verification",
+    contactName: "Internal check",
+    email: "sales@urbanfocus.co.za",
+    customerReference: "LIVE-API-CHECK",
+    deliveryLocation: "Centurion",
+    subject: "Backpack",
+    company: defaultQuoteCompanySettings(),
+    lines: [{ ...shelf, quantity: 10 }],
+    references: [],
+  });
+  assert.equal(ten.lines[0]?.lineTotalCents, 565_220);
+  assert.equal(ten.vatCents, 84_780);
+  assert.equal(ten.totalInclCents, 650_000);
+  const mixed = buildQuotationDocument({
+    mode: "STANDARD",
+    exportQuote: false,
+    sequence: 1,
+    issuedAt,
+    validUntil,
+    currency: "ZAR",
+    customerCompany: "Verification",
+    contactName: "Internal check",
+    email: "sales@urbanfocus.co.za",
+    customerReference: "LIVE-API-CHECK",
+    deliveryLocation: "Centurion",
+    subject: "Mixed",
+    company: defaultQuoteCompanySettings(),
+    lines: [shelf, { ...dock, sourceKind: "", costStatus: "VERIFIED", unitPriceCents: 100_000, quantity: 1 }],
+    references: [],
+  });
+  assert.equal(mixed.subtotalExclCents, 156_522);
+  assert.equal(mixed.vatCents, 23_478);
+  assert.equal(mixed.totalInclCents, 180_000);
 });
 
 test("prices a two-line quotation from the snapshot and keeps supplier data out", () => {

@@ -20,7 +20,7 @@ import { assistProductSelection, selectionIsNeeded } from "../lib/ai/product-evi
 import { sendQuote } from "./quote-service";
 import { sendCustomerResponse } from "./reply-service";
 import { extractProductRequirements, planSourcing, requirementAwaitingQuantity, requirementSummary, type OutstandingItem, type ProductRequirement, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
-import { parseUrbanFocusSearch, relevantStoreProducts, urbanFocusCandidate, urbanFocusSearchQueries, urbanFocusSupplies } from "../lib/urban-focus-search";
+import { parseUrbanFocusSearch, relevantStoreProducts, UrbanFocusCatalogueError, urbanFocusCandidate, urbanFocusCatalogueHold, urbanFocusSearchQueries, urbanFocusSupplies } from "../lib/urban-focus-search";
 import { loadStoreProvider } from "./store/load";
 import { sourceExternalForRequirements } from "./external-sourcing-service";
 import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp, unpricedCatalogueNote } from "./sales-response-service";
@@ -532,7 +532,15 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     autoQuoteMarginPercent: workspace.autoQuoteMarginPercent,
     autoSendMarginPercent: workspace.autoSendMarginPercent,
   };
-  let pools = await sourcingPools(workspace.id, requirements);
+  let pools: SourcingPools;
+  try {
+    pools = await sourcingPools(workspace.id, requirements);
+  } catch (error) {
+    if (!(error instanceof UrbanFocusCatalogueError)) throw error;
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: error.message, quoteBlockedReason: error.message } });
+    await recordRfqEvent(workspace.id, rfq.id, "REVIEW_REQUIRED", "REVIEWING", error.message);
+    return respond({ planKind: "STAFF_REVIEW" });
+  }
   const strictness = requirements[0] ? requestStrictness(requirements[0].requestedText, Boolean(requirements[0].sku || requirements[0].mpn || requirements[0].model)) : "";
   const requirementsHash = createHash("sha256").update(requirements.map((requirement) => requirement.requestedText).join("\n")).digest("hex").slice(0, 16);
   await db.rfq.update({ where: { id: rfq.id }, data: { status: "MATCHING", strictness, requirementsHash } });
@@ -832,20 +840,23 @@ export async function sourcingPools(workspaceId: string, requirements: ProductRe
 }
 
 async function urbanFocusCatalogue(workspaceId: string, requirements: ProductRequirement[], now: Date): Promise<SourcingCandidate[]> {
+  const queries = urbanFocusSearchQueries(requirements);
+  if (queries.length === 0) return [];
   const loaded = await loadStoreProvider(workspaceId);
-  if (!loaded) return [];
+  if (!loaded) throw new UrbanFocusCatalogueError("The Urban Focus catalogue connection is not available. The request was held and was not quoted from another source.");
   const seen = new Set<string>();
   const candidates: SourcingCandidate[] = [];
-  for (const query of urbanFocusSearchQueries(requirements)) {
+  for (const query of queries) {
     let body: unknown;
     try {
       body = await loaded.provider.searchCatalogue(query);
-    } catch {
-      continue;
+    } catch (error) {
+      throw new UrbanFocusCatalogueError(urbanFocusCatalogueHold({ error }) ?? "The Urban Focus catalogue could not be read. The request was held and was not quoted from another source.");
     }
-    if (!body) continue;
+    const held = urbanFocusCatalogueHold({ body });
+    if (held) throw new UrbanFocusCatalogueError(held);
     const parsed = parseUrbanFocusSearch(body);
-    if ("error" in parsed) continue;
+    if ("error" in parsed) throw new UrbanFocusCatalogueError("The Urban Focus catalogue returned a response that could not be read. The request was held and was not quoted from another source.");
     for (const product of relevantStoreProducts(parsed, query)) {
       if (!product.published || seen.has(product.storeProductId)) continue;
       seen.add(product.storeProductId);
