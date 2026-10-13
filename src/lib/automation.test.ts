@@ -114,11 +114,12 @@ test("keeps a stated quantity phrase and does not invent a prose product", () =>
   assert.equal(stated.lines[0]?.quantity, 2);
   assert.match(stated.lines[0]?.description ?? "", /ThinkPad E14/);
   assert.equal(stated.lines[0]?.sku, "");
-  const prose = [
-    "Please quote 5 Lenovo ThinkPad E14 laptops.",
-    "Kindly provide pricing for 20 units of D11G8ET.",
-  ];
-  for (const body of prose) assert.deepEqual(extractRfqRequest(body).lines, []);
+  const named = extractRfqRequest("Please quote 5 Lenovo ThinkPad E14 laptops.");
+  assert.equal(named.lines[0]?.quantity, 5);
+  assert.match(named.lines[0]?.description ?? "", /ThinkPad E14/);
+  const part = extractRfqRequest("Kindly provide pricing for 20 units of D11G8ET.");
+  assert.equal(part.lines[0]?.quantity, 20);
+  assert.equal(part.lines[0]?.manufacturerPartNumber, "D11G8ET");
   const specified = extractRfqRequest("We need 10 HP laptops with Core i5, 16GB RAM and 512GB SSD.");
   assert.equal(specified.lines.length, 1);
   assert.equal(specified.lines[0]?.quantity, 10);

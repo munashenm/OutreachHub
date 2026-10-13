@@ -101,6 +101,8 @@ export type QuotationDocument = {
   banking: { bankName: string; accountName: string; accountNumber: string; branchCode: string; accountType: string; reference: string } | null;
   compliance: Array<{ item: string; requirement: string; proposed: string; status: ComplianceStatus }>;
   references: string[];
+  outstanding: Array<{ label: string; quantity: number | null; reason: string; sourceUrl: string }>;
+  internalDraft: boolean;
   customerMessage: string;
   availability: string;
   alternatives: boolean;
@@ -142,10 +144,25 @@ export function quotationEmailSubject(sequence: number, issuedAt: Date, storedFi
   return `Quotation ${displayedQuoteNumber(sequence, issuedAt, storedFilename)}`;
 }
 
-export function quoteCoverEmail(input: { customerName: string; quoteNumber: string; validUntil: Date }) {
+export function quoteCoverEmail(input: { customerName: string; quoteNumber: string; validUntil: Date; outstanding?: string[] }) {
   const name = input.customerName.trim();
+  const outstanding = (input.outstanding ?? []).map((item) => item.trim()).filter(Boolean);
+  const greeting = name ? `Good day ${name},` : "Good day,";
+  if (outstanding.length > 0) {
+    return [
+      greeting,
+      "",
+      `Internal draft ${input.quoteNumber} is not ready to send.`,
+      "These requested items are still outstanding and are excluded from the total:",
+      ...outstanding.map((item) => `- ${item}`),
+      "The priced lines are kept for review. A partial quotation can be released only after explicit approval.",
+      "",
+      "Regards,",
+      "Urban Focus Sales Team",
+    ].join("\n");
+  }
   return [
-    name ? `Good day ${name},` : "Good day,",
+    greeting,
     "",
     `Please find attached Urban Focus quotation ${input.quoteNumber} in response to your enquiry.`,
     `The quotation is valid until ${formatQuoteDate(input.validUntil)}.`,
@@ -183,7 +200,14 @@ export function buildQuotationDocument(input: {
   blockedReferenceUrls?: string[];
   storedFilename?: string;
 }): QuotationDocument {
-  const totals = quotationTotals(input.lines);
+  const pricedLines = input.lines.filter((line) => line.costStatus !== "OUTSTANDING");
+  const outstanding = input.lines.filter((line) => line.costStatus === "OUTSTANDING").map((line) => ({
+    label: line.description,
+    quantity: line.quantity,
+    reason: line.specifications || "No verified source has been found yet.",
+    sourceUrl: "",
+  }));
+  const totals = quotationTotals(pricedLines) ?? (pricedLines.length === 0 ? { subtotalExclCents: 0, vatCents: 0, totalInclCents: 0 } : null);
   if (!totals) throw new Error("The quotation totals could not be calculated.");
   const numberLabel = input.sequence == null ? "" : displayedQuoteNumber(input.sequence, input.issuedAt, input.storedFilename ?? "");
   const filename = input.sequence == null ? "quotation.pdf" : quotePdfFilename(input.sequence, input.issuedAt, input.storedFilename ?? "");
@@ -217,7 +241,7 @@ export function buildQuotationDocument(input: {
     deliveryLocation: input.deliveryLocation.trim(),
     subject: input.subject.trim(),
     company,
-    lines: input.lines.map((line, index) => {
+    lines: pricedLines.map((line, index) => {
       const formatted = formatQuotationLine({
         name: line.modelName,
         description: line.description,
@@ -239,11 +263,15 @@ export function buildQuotationDocument(input: {
     ...totals,
     terms,
     banking,
-    compliance: input.mode === "FORMAL" ? input.lines.flatMap((line, index) => complianceForLine(line, index)) : [],
+    compliance: input.mode === "FORMAL" ? pricedLines.flatMap((line, index) => complianceForLine(line, index)) : [],
     references,
-    customerMessage: QUOTATION_CUSTOMER_MESSAGE,
+    outstanding,
+    internalDraft: outstanding.length > 0,
+    customerMessage: outstanding.length > 0
+      ? `Internal draft. Outstanding items are listed and are not included in the total: ${outstanding.map((item) => item.label).join("; ")}.`
+      : QUOTATION_CUSTOMER_MESSAGE,
     availability: QUOTATION_AVAILABILITY,
-    alternatives: input.lines.length > 1 && input.lines.every((line) => /^OPTION\s+\d+/i.test(line.description.trim()) && !line.modelName.trim()),
+    alternatives: pricedLines.length > 1 && pricedLines.every((line) => /^OPTION\s+\d+/i.test(line.description.trim()) && !line.modelName.trim()),
   };
 }
 

@@ -24,6 +24,32 @@ export type ParsedListing = {
   currency: string;
 };
 
+export function openAiCitationHits(payload: unknown): SearchHit[] {
+  if (!payload || typeof payload !== "object" || !("output" in payload) || !Array.isArray(payload.output)) return [];
+  const hits: SearchHit[] = [];
+  const seen = new Set<string>();
+  const add = (url: unknown, title: unknown) => {
+    if (typeof url !== "string" || !url.startsWith("https://") || seen.has(url)) return;
+    seen.add(url);
+    hits.push({ url, title: typeof title === "string" ? title : "" });
+  };
+  for (const item of payload.output) {
+    if (!item || typeof item !== "object") continue;
+    const sources = "action" in item && item.action && typeof item.action === "object" && "sources" in item.action && Array.isArray(item.action.sources) ? item.action.sources : [];
+    for (const source of sources) {
+      if (source && typeof source === "object") add("url" in source ? source.url : "", "title" in source ? source.title : "");
+    }
+    const content = "content" in item && Array.isArray(item.content) ? item.content : [];
+    for (const part of content) {
+      if (!part || typeof part !== "object" || !("annotations" in part) || !Array.isArray(part.annotations)) continue;
+      for (const annotation of part.annotations) {
+        if (annotation && typeof annotation === "object") add("url" in annotation ? annotation.url : "", "title" in annotation ? annotation.title : "");
+      }
+    }
+  }
+  return hits;
+}
+
 export function configuredSearchProvider(env: Record<string, string | undefined>) {
   if (env.BRAVE_SEARCH_API_KEY?.trim()) return "brave" as const;
   if (env.GOOGLE_SEARCH_API_KEY?.trim() && env.GOOGLE_SEARCH_CX?.trim()) return "google" as const;
@@ -34,7 +60,7 @@ export function configuredSearchProvider(env: Record<string, string | undefined>
 export function externalSearchQuery(requirement: ProductRequirement) {
   if (requirement.sku) return `${requirement.sku} South Africa price`;
   if (requirement.mpn) return `${requirement.mpn} South Africa price`;
-  return [
+  const described = [
     requirement.productType || requirement.formFactor,
     requirement.brandPreference,
     requirement.processor,
@@ -42,8 +68,10 @@ export function externalSearchQuery(requirement: ProductRequirement) {
     requirement.storageGb ? `${requirement.storageGb}GB ${requirement.storageType || "SSD"}` : "",
     requirement.operatingSystem,
     requirement.screenInches ? `${requirement.screenInches} inch` : "",
-    "South Africa",
-  ].filter(Boolean).join(" ");
+  ].filter(Boolean);
+  if (described.length > 0) return `${described.join(" ")} South Africa`;
+  const words = requirement.requestedText.replace(/\b(please|kindly|also|quote|quotation|for|the|and|of|a|an)\b/gi, " ").replace(/\s+/g, " ").trim();
+  return `${words || "product"} South Africa`.slice(0, 160);
 }
 
 export function rankExternalUrls(hits: SearchHit[]): RankedPage[] {
@@ -77,26 +105,25 @@ export function rankExternalUrls(hits: SearchHit[]): RankedPage[] {
   return ranked.map(({ rank: _rank, ...page }) => page);
 }
 
-export function parseProductPage(html: string, pageUrl: string): { listing: ParsedListing | null; reason: string } {
+export type ObservedProduct = Omit<ParsedListing, "vatIncluded"> & { vatIncluded: boolean | null };
+
+export function observeProductPage(html: string, pageUrl: string): { product: ObservedProduct | null; reason: string } {
   const blocks = [...html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1] ?? "");
   const product = blocks.flatMap(readJsonLd).find((node) => node.type === "Product") ?? null;
   const name = clean(product?.name || metaContent(html, "og:title") || titleText(html));
-  if (!name) return { listing: null, reason: "The page did not name a product." };
-  if (/\b(used|refurbished|pre-?owned)\b/i.test(name)) return { listing: null, reason: "The listing is used or refurbished." };
+  if (!name) return { product: null, reason: "The page did not name a product." };
+  if (/\b(used|refurbished|pre-?owned)\b/i.test(`${name} ${pageUrl}`)) return { product: null, reason: "The listing is used or refurbished." };
   const offer = product?.offer ?? null;
   const priceText = offer?.price || metaContent(html, "product:price:amount") || visiblePrice(html);
   const listedPriceCents = zarToCents(priceText);
-  if (listedPriceCents == null) return { listing: null, reason: "The page did not state a price." };
+  if (listedPriceCents == null || listedPriceCents <= 0) return { product: null, reason: "The page did not state a price." };
   const currency = (offer?.currency || metaContent(html, "product:price:currency") || "ZAR").toUpperCase();
-  if (currency !== "ZAR") return { listing: null, reason: `The price currency is ${currency}.` };
-  const vat = vatStatus(html, offer?.vatIncluded ?? null);
-  if (vat == null) return { listing: null, reason: "The page did not state whether VAT is included." };
+  if (currency !== "ZAR") return { product: null, reason: `The price currency is ${currency}.` };
   const availability = offer?.availability || availabilityText(html);
-  if (!availability) return { listing: null, reason: "The page did not state availability." };
-  const stockQty = quantityFromAvailability(availability) ?? quantityFromText(html);
+  const stockQty = availability ? quantityFromAvailability(availability) ?? quantityFromText(html) : null;
   const specifications = clean([product?.description, name].filter(Boolean).join("\n"));
   return {
-    listing: {
+    product: {
       name,
       brand: clean(product?.brand || ""),
       model: clean(product?.model || name),
@@ -104,13 +131,21 @@ export function parseProductPage(html: string, pageUrl: string): { listing: Pars
       mpn: clean(product?.mpn || ""),
       specifications,
       listedPriceCents,
-      vatIncluded: vat,
+      vatIncluded: vatStatus(html, offer?.vatIncluded ?? null),
       availability,
       stockQty,
       currency,
     },
     reason: "",
   };
+}
+
+export function parseProductPage(html: string, pageUrl: string): { listing: ParsedListing | null; reason: string } {
+  const observed = observeProductPage(html, pageUrl);
+  if (!observed.product) return { listing: null, reason: observed.reason };
+  if (observed.product.vatIncluded == null) return { listing: null, reason: "The page did not state whether VAT is included." };
+  if (!observed.product.availability) return { listing: null, reason: "The page did not state availability." };
+  return { listing: { ...observed.product, vatIncluded: observed.product.vatIncluded }, reason: "" };
 }
 
 export function listingRejection(requirement: ProductRequirement, listing: ParsedListing, pageUrl: string) {
@@ -210,7 +245,8 @@ function availabilityText(html: string) {
   const stock = html.match(/\b(\d+)\s+(?:in stock|available)\b/i);
   if (stock) return stock[0];
   if (/\bout of stock\b/i.test(html)) return "OutOfStock";
-  if (/\bin stock\b/i.test(html)) return "InStock";
+  const withoutForecast = html.replace(/\bexpected to be in stock\b/gi, " ");
+  if (/\bin stock\b/i.test(withoutForecast)) return "InStock";
   return "";
 }
 

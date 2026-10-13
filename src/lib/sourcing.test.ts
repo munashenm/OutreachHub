@@ -290,7 +290,7 @@ Intel Core Ultra 7 155H
   assert.equal(requirement?.screenInches, 14);
   assert.equal(requirementSummary(requirement!), "Laptop, Core Ultra 7, 16GB RAM, 512GB SSD, 14 inch, Windows 11 Pro");
   const noted = planSourcing({ requirements: [requirement!], pools: emptyPools(), ...margins, now });
-  assert.equal(noted.kind, "SOURCING");
+  assert.equal(noted.kind, "STAFF_REVIEW");
   const attached = extractProductRequirements("Please quote 4 business laptops. The specification is attached.")[0];
   const plan = planSourcing({ requirements: attached ? [attached] : [], pools: emptyPools(), ...margins, now });
   assert.equal(plan.kind, "CLARIFICATION");
@@ -329,7 +329,7 @@ Intel Core Ultra 7 155H
     ...margins,
     now,
   });
-  assert.equal(plan.kind, "SOURCING");
+  assert.equal(plan.kind, "STAFF_REVIEW");
 });
 
 function catalogueLaptop(overrides: Partial<SourcingCandidate>) {

@@ -19,7 +19,7 @@ function csvText(text: string) {
 }
 
 async function readXlsx(bytes: Buffer) {
-  const { Workbook } = await import("exceljs");
+  const { Workbook } = createRequire(import.meta.url)("exceljs") as typeof import("exceljs");
   const workbook = new Workbook();
   await workbook.xlsx.load(bytes as never);
   const pages: DocumentPage[] = [];

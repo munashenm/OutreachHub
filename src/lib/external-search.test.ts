@@ -5,6 +5,7 @@ import {
   configuredSearchProvider,
   externalSearchQuery,
   listingRejection,
+  openAiCitationHits,
   parseProductPage,
   rankExternalUrls,
 } from "./external-search";
@@ -17,9 +18,25 @@ test("builds a specification query and keeps the search provider unset until a k
   assert.equal(requirement.processor, "Core i5");
   assert.equal(requirement.ramGb, 16);
   assert.equal(externalSearchQuery(requirement), "Laptop Core i5 16GB RAM 512GB SSD Windows 11 Pro 14 inch South Africa");
+  const scanner = extractProductRequirements("Also quote 2 barcode scanners.")[0];
+  assert.match(externalSearchQuery(scanner!), /barcode scanners/i);
+  assert.match(externalSearchQuery(scanner!), /South Africa/);
   assert.equal(configuredSearchProvider({}), null);
   assert.equal(configuredSearchProvider({ BRAVE_SEARCH_API_KEY: "present" }), "brave");
   assert.match(SEARCH_PROVIDER_DEPENDENCY, /BRAVE_SEARCH_API_KEY/);
+});
+
+test("OpenAI web search citations become page addresses and invented prices are ignored", () => {
+  const hits = openAiCitationHits({
+    output: [
+      { type: "web_search_call", action: { sources: [{ url: "https://www.incredible.co.za/barcode-scanner", title: "Barcode scanner" }] } },
+      { type: "message", content: [{ annotations: [{ url: "https://www.takealot.com/scanner", title: "Scanner" }, { url: "http://insecure.example/scanner", title: "Dropped" }] }] },
+    ],
+  });
+  assert.deepEqual(hits.map((hit) => hit.url), ["https://www.incredible.co.za/barcode-scanner", "https://www.takealot.com/scanner"]);
+  const ranked = rankExternalUrls(hits);
+  assert.equal(ranked.every((page) => page.url.startsWith("https://")), true);
+  assert.equal("price" in (hits[0] ?? {}), false);
 });
 
 test("ranks manufacturers, distributors, and South African retailers and drops marketplaces", () => {

@@ -20,6 +20,7 @@ export function renderQuotationPdf(document: QuotationDocument, logo?: Buffer) {
   drawHeader(pdf, document, logo ?? readLogo());
   drawParties(pdf, document);
   drawSchedule(pdf, document);
+  drawOutstanding(pdf, document);
   drawTotals(pdf, document);
   drawTerms(pdf, document);
   if (document.banking) drawBanking(pdf, document);
@@ -39,7 +40,7 @@ function readLogo() {
 
 function drawHeader(pdf: Pdf, document: QuotationDocument, logo: Buffer | null) {
   if (logo) pdf.image(logo, 40, 32, { fit: [210, 40] });
-  pdf.fillColor(NAVY).font("Helvetica-Bold").fontSize(16).text("QUOTATION", 280, 32, { width: 275, align: "right" });
+  pdf.fillColor(NAVY).font("Helvetica-Bold").fontSize(16).text(document.internalDraft ? "INTERNAL DRAFT" : "QUOTATION", 280, 32, { width: 275, align: "right" });
   pdf.font("Helvetica").fontSize(9).fillColor(MUTED);
   const facts = [
     `Quotation No: ${document.numberLabel}`,
@@ -95,6 +96,20 @@ function drawSchedule(pdf: Pdf, document: QuotationDocument) {
     pdf.text(moneyLabel(line.lineTotalCents), columns[4] + 4, y + 6, { width: widths[4] - 8, align: "right" });
     pdf.y = y + height;
   });
+}
+
+function drawOutstanding(pdf: Pdf, document: QuotationDocument) {
+  if (document.outstanding.length === 0) return;
+  ensureSpace(pdf, document, 36);
+  pdf.moveDown(0.6);
+  pdf.font("Helvetica-Bold").fontSize(10).fillColor(NAVY).text("OUTSTANDING — NOT INCLUDED IN THE TOTAL", 40, pdf.y, { width: 515 });
+  pdf.moveDown(0.3);
+  for (const item of document.outstanding) {
+    const quantity = item.quantity == null ? "Quantity not stated" : `Quantity ${item.quantity}`;
+    const source = item.sourceUrl ? ` Evidence: ${item.sourceUrl}` : "";
+    pdf.font("Helvetica").fontSize(8).fillColor("#111827").text(`${item.label}. ${quantity}. ${item.reason}${source}`, 40, pdf.y, { width: 515 });
+    pdf.moveDown(0.3);
+  }
 }
 
 function drawTotals(pdf: Pdf, document: QuotationDocument) {

@@ -50,7 +50,7 @@ test("does not auto-send unless the product, price, and stock are verified and c
   assert.equal(quotationSendPermission({ verifiedAutoSend: false, analysis: ready }), "MANUAL");
   assert.equal(quotationSendPermission({ verifiedAutoSend: true, analysis: { ...ready!, confidence: 0.8 } }), "REVIEW");
   assert.equal(quotationSendPermission({ verifiedAutoSend: true, analysis: { ...ready!, confidence: 0.4, missingInformation: ["quantity"] } }), "CLARIFY");
-  assert.equal(quotationSendPermission({ verifiedAutoSend: true, analysis: null }), "EXISTING");
+  assert.equal(quotationSendPermission({ verifiedAutoSend: true, analysis: null }), "MANUAL");
 });
 
 test("a customer draft cannot carry a price, stock figure, or quotation number", () => {
@@ -131,7 +131,12 @@ test("a parsed email keeps its requirement, and a grounded interpretation fills 
   const kept = requirementsForSourcing(explicit, null);
   assert.equal(kept[0]?.model.toLowerCase().includes("thinkpad"), true);
   const informal = "Can you supply ThinkPad E14 notebooks for the team.";
-  assert.equal(requirementsForSourcing(informal, null).length, 0);
+  const read = requirementsForSourcing(informal, null);
+  assert.equal(read.length, 1);
+  assert.equal(read[0]?.model.toLowerCase().includes("thinkpad"), true);
+  assert.equal(read[0]?.quantity, null);
+  const blank = "Please advise on the attached request.";
+  assert.equal(requirementsForSourcing(blank, null).length, 0);
   const analysis = groundRfqAnalysis(parseRfqAnalysis({
     classification: "RFQ",
     customerIntent: "Quote",
@@ -141,8 +146,36 @@ test("a parsed email keeps its requirement, and a grounded interpretation fills 
     recommendedAction: "QUOTE",
     confidence: 0.93,
     responseDraft: "",
-  })!, informal);
-  const filled = requirementsForSourcing(informal, analysis);
+  })!, blank);
+  assert.equal(requirementsForSourcing(blank, analysis).length, 0);
+  const grounded = groundRfqAnalysis(parseRfqAnalysis({
+    classification: "RFQ",
+    customerIntent: "Quote",
+    items: [{ quantity: 2, category: "laptop", brand: "Lenovo", model: "ThinkPad E14", specifications: ["16GB RAM"], sku: "", mpn: "" }],
+    missingInformation: [],
+    sufficientToQuote: true,
+    recommendedAction: "QUOTE",
+    confidence: 0.93,
+    responseDraft: "",
+  })!, "2 x Lenovo ThinkPad E14, 16GB RAM");
+  const filled = requirementsForSourcing("", grounded);
   assert.equal(filled[0]?.model.toLowerCase().includes("thinkpad e14"), true);
-  assert.equal(filled[0]?.quantity, null);
+  assert.equal(filled[0]?.quantity, 2);
+  const mixed = "Please quote 2 x Lenovo ThinkPad E14. Also include the USB-C dock.";
+  const both = requirementsForSourcing(mixed, groundRfqAnalysis(parseRfqAnalysis({
+    classification: "RFQ",
+    customerIntent: "Quote",
+    items: [
+      { quantity: 2, category: "Laptop", brand: "Lenovo", model: "ThinkPad E14", specifications: [], mandatorySpecifications: [], preferences: [], uncertainties: [], sku: "", mpn: "" },
+      { quantity: null, category: "Dock", brand: "", model: "", specifications: ["USB-C"], mandatorySpecifications: ["USB-C"], preferences: [], uncertainties: ["Quantity was not stated for the dock."], sku: "", mpn: "" },
+    ],
+    missingInformation: [],
+    uncertainties: [],
+    sufficientToQuote: false,
+    recommendedAction: "SOURCE_PRODUCT",
+    confidence: 0.9,
+    responseDraft: "",
+  })!, mixed));
+  assert.equal(both.some((item) => item.model.toLowerCase().includes("thinkpad") && item.quantity === 2), true);
+  assert.equal(both.some((item) => item.productType === "Dock"), true);
 });
