@@ -24,6 +24,32 @@ export type ParsedListing = {
   currency: string;
 };
 
+export function openAiCitationHits(payload: unknown): SearchHit[] {
+  if (!payload || typeof payload !== "object" || !("output" in payload) || !Array.isArray(payload.output)) return [];
+  const hits: SearchHit[] = [];
+  const seen = new Set<string>();
+  const add = (url: unknown, title: unknown) => {
+    if (typeof url !== "string" || !url.startsWith("https://") || seen.has(url)) return;
+    seen.add(url);
+    hits.push({ url, title: typeof title === "string" ? title : "" });
+  };
+  for (const item of payload.output) {
+    if (!item || typeof item !== "object") continue;
+    const sources = "action" in item && item.action && typeof item.action === "object" && "sources" in item.action && Array.isArray(item.action.sources) ? item.action.sources : [];
+    for (const source of sources) {
+      if (source && typeof source === "object") add("url" in source ? source.url : "", "title" in source ? source.title : "");
+    }
+    const content = "content" in item && Array.isArray(item.content) ? item.content : [];
+    for (const part of content) {
+      if (!part || typeof part !== "object" || !("annotations" in part) || !Array.isArray(part.annotations)) continue;
+      for (const annotation of part.annotations) {
+        if (annotation && typeof annotation === "object") add("url" in annotation ? annotation.url : "", "title" in annotation ? annotation.title : "");
+      }
+    }
+  }
+  return hits;
+}
+
 export function configuredSearchProvider(env: Record<string, string | undefined>) {
   if (env.BRAVE_SEARCH_API_KEY?.trim()) return "brave" as const;
   if (env.GOOGLE_SEARCH_API_KEY?.trim() && env.GOOGLE_SEARCH_CX?.trim()) return "google" as const;

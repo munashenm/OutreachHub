@@ -4,27 +4,41 @@ import {
   configuredSearchProvider,
   externalSearchQuery,
   listingRejection,
+  openAiCitationHits,
   observeProductPage,
   parseProductPage,
   rankExternalUrls,
   type SearchHit,
 } from "../lib/external-search";
+import { logAiUse } from "../lib/ai/rfq-analyzer";
 import { getDb } from "../lib/db";
 import { sourcingCacheKey, type ProductRequirement, type SourcingCandidate } from "../lib/sourcing";
 import { assertPublicHttpsUrl } from "../lib/stock";
 
 const PAGE_LIMIT = 4;
+const SEARCH_LIMIT = 4;
 
 export async function sourceExternalForRequirements(workspaceId: string, requirements: ProductRequirement[], queryOverride = "") {
   const provider = configuredSearchProvider(process.env);
-  if (!provider) return { candidates: [] as SourcingCandidate[], dependency: SEARCH_PROVIDER_DEPENDENCY, note: SEARCH_PROVIDER_DEPENDENCY };
+  const openAiSearch = !provider && Boolean(process.env.OPENAI_API_KEY?.trim());
+  if (!provider && !openAiSearch) return { candidates: [] as SourcingCandidate[], dependency: SEARCH_PROVIDER_DEPENDENCY, note: SEARCH_PROVIDER_DEPENDENCY };
   const candidates: SourcingCandidate[] = [];
   const notes: string[] = [];
-  for (const requirement of requirements) {
+  for (const requirement of requirements.slice(0, SEARCH_LIMIT)) {
+    const cacheKey = sourcingCacheKey(requirement);
+    const cached = await getDb().externalSourceOffer.findMany({
+      where: { workspaceId, cacheKey, checkedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+      take: PAGE_LIMIT,
+    });
+    if (cached.length > 0) {
+      candidates.push(...cached.map((saved) => candidateFromOffer(saved, saved.sourceType === "MANUFACTURER" || saved.sourceType === "DISTRIBUTOR" || saved.sourceType === "RETAILER" ? saved.sourceType : "RETAILER")));
+      notes.push(`Used ${cached.length} cached source${cached.length === 1 ? "" : "s"}.`);
+      continue;
+    }
     const query = queryOverride.trim() || externalSearchQuery(requirement);
     let hits: SearchHit[] = [];
     try {
-      hits = await searchWeb(provider, query);
+      hits = provider ? await searchWeb(provider, query) : await searchOpenAi(query);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       notes.push(/api_key|subscription-token|key=/i.test(message) ? "The search provider could not be reached." : message.slice(0, 180) || "The search provider could not be reached.");
@@ -75,32 +89,7 @@ export async function sourceExternalForRequirements(workspaceId: string, require
             stockQty: parsed.listing.stockQty,
           },
         });
-        candidates.push({
-          sourceKind: "EXTERNAL_SOURCE",
-          sourceName: saved.sourceName,
-          sourceUrl: saved.sourceUrl,
-          sourceType: page.sourceType,
-          productId: null,
-          name: saved.productName,
-          brand: saved.brand,
-          model: saved.model,
-          sku: saved.sku,
-          mpn: saved.mpn,
-          specifications: saved.specifications,
-          costExVatCents: null,
-          listedPriceCents: saved.listedPriceCents,
-          vatIncluded: saved.vatIncluded,
-          shippingCents: saved.shippingCents,
-          procurementCents: 0,
-          importCents: 0,
-          riskPercent: 5,
-          markupPercent: 25,
-          stockQty: saved.stockQty,
-          stockKnown: saved.stockQty != null,
-          fresh: true,
-          checkedAt: saved.checkedAt.toISOString(),
-          reputable: true,
-        });
+        candidates.push(candidateFromOffer(saved, page.sourceType));
         notes.push(`Accepted ${saved.productName} at ${saved.sourceUrl}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : "The product page could not be read.";
@@ -110,6 +99,60 @@ export async function sourceExternalForRequirements(workspaceId: string, require
   }
   const note = notes.join("\n").slice(0, 2000) || "External search returned no usable product.";
   return { candidates, dependency: candidates.length > 0 ? null : note, note };
+}
+
+function candidateFromOffer(saved: { sourceName: string; sourceUrl: string; productName: string; brand: string; model: string; sku: string; mpn: string; specifications: string; listedPriceCents: number; vatIncluded: boolean; shippingCents?: number; stockQty: number | null; checkedAt: Date }, sourceType: SourcingCandidate["sourceType"] = "RETAILER"): SourcingCandidate {
+  return {
+    sourceKind: "EXTERNAL_SOURCE",
+    sourceName: saved.sourceName,
+    sourceUrl: saved.sourceUrl,
+    sourceType,
+    productId: null,
+    name: saved.productName,
+    brand: saved.brand,
+    model: saved.model,
+    sku: saved.sku,
+    mpn: saved.mpn,
+    specifications: saved.specifications,
+    costExVatCents: null,
+    listedPriceCents: saved.listedPriceCents,
+    vatIncluded: saved.vatIncluded,
+    shippingCents: saved.shippingCents ?? 0,
+    procurementCents: 0,
+    importCents: 0,
+    riskPercent: 5,
+    markupPercent: 25,
+    stockQty: saved.stockQty,
+    stockKnown: saved.stockQty != null,
+    fresh: true,
+    checkedAt: saved.checkedAt.toISOString(),
+    reputable: true,
+  };
+}
+
+async function searchOpenAi(query: string): Promise<SearchHit[]> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim() ?? "";
+  if (!apiKey) return [];
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(45_000),
+    body: JSON.stringify({
+      model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+      tools: [{ type: "web_search", user_location: { type: "approximate", country: "ZA" }, search_context_size: "low" }],
+      instructions: "Find current South African supplier or retailer pages for the requested product. Prefer .co.za sources. Do not invent a price, stock figure, or specification.",
+      input: query.slice(0, 300),
+    }),
+  });
+  const json = await response.json() as unknown;
+  if (!response.ok) {
+    logAiUse({ purpose: "web_search", invoked: true, success: false, reviewReason: `OpenAI search returned ${response.status}.` });
+    throw new Error(`OpenAI search returned ${response.status}.`);
+  }
+  const hits = openAiCitationHits(json).slice(0, 8);
+  const usage = json && typeof json === "object" && "usage" in json ? (json as { usage?: { input_tokens?: number; output_tokens?: number } }).usage : undefined;
+  logAiUse({ purpose: "web_search", invoked: true, success: hits.length > 0, reviewReason: hits.length > 0 ? `${hits.length} cited pages` : "No cited product page was returned.", inputTokens: usage?.input_tokens, outputTokens: usage?.output_tokens });
+  return hits;
 }
 
 async function searchWeb(provider: "brave" | "google" | "serpapi", query: string): Promise<SearchHit[]> {
