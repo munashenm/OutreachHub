@@ -137,12 +137,14 @@ export function emptyRequirement(requestedText = ""): ProductRequirement {
 }
 
 const ACCESSORY_TYPES = new Set(["Power supply", "Charger", "Adapter", "Cable", "Dock"]);
-const QUANTITY_NOUN = "laptop\\s+power\\s+supplies|laptop\\s+power\\s+supply|laptop\\s+chargers?|power\\s+supplies|power\\s+supply|chargers?|adapters?|cables?|docks?|laptops?|notebooks?|workstations?|servers?|switches?|monitors?|printers?|desks?";
+const QUANTITY_NOUN = "laptop\\s+power\\s+supplies|laptop\\s+power\\s+supply|laptop\\s+chargers?|power\\s+supplies|power\\s+supply|chargers?|adapters?|cables?|docks?|laptops?|notebooks?|workstations?|servers?|switches?|monitors?|printers?|desks?|chairs?";
 
 export function extractProductRequirements(body: string): ProductRequirement[] {
   const structured = extractStructuredRequirements(body);
-  if (structured.length > 0) return structured;
-  return extractGroupedRequirements(body);
+  const grouped = extractGroupedRequirements(body, false);
+  if (structured.length === 0) return grouped.length > 0 ? grouped : extractGroupedRequirements(body, true);
+  const additions = grouped.filter((item) => !structured.some((existing) => textsOverlap(existing.requestedText, item.requestedText)));
+  return mergeRequirementLists(structured, additions);
 }
 
 export function mergeRequirementLists(primary: ProductRequirement[], extra: ProductRequirement[]): ProductRequirement[] {
@@ -162,7 +164,15 @@ export function mergeRequirementLists(primary: ProductRequirement[], extra: Prod
   return merged;
 }
 
+function textsOverlap(left: string, right: string) {
+  const a = left.replace(/\s+/g, " ").trim().toLowerCase();
+  const b = right.replace(/\s+/g, " ").trim().toLowerCase();
+  if (a.length < 12 || b.length < 12) return false;
+  return a.includes(b.slice(0, 40)) || b.includes(a.slice(0, 40));
+}
+
 function sameRequestedProduct(left: ProductRequirement, right: ProductRequirement) {
+  if (left.quantity != null && right.quantity != null && left.quantity !== right.quantity) return false;
   if (left.productType && right.productType && left.productType !== right.productType) return false;
   if (left.sku && right.sku) return left.sku.toLowerCase() === right.sku.toLowerCase();
   if (left.mpn && right.mpn) return left.mpn.toLowerCase() === right.mpn.toLowerCase();
@@ -199,14 +209,14 @@ type QuantitySpan = { quantity: number; phrase: string; index: number; length: n
 
 function quantitySpans(body: string): QuantitySpan[] {
   const withoutIndexes = body.split(/\r?\n/).map((line) => line.replace(/^\s*\d+[.)]\s+/, "")).join("\n");
-  const pattern = new RegExp(`\\b(\\d+)\\s*(?:x|×)?\\s+(?:(additional|extra|replacement|more)\\s+)?((?:business|professional|replacement)\\s+)?(${QUANTITY_NOUN})\\b`, "gi");
+  const pattern = new RegExp(`\\b(\\d+)\\s*(?:x|×)?\\s+(?:(?:additional|extra|replacement|more|business|professional|office|task|ergonomic|executive|laser|colour|color|laptop)\\s+){0,3}(${QUANTITY_NOUN})\\b`, "gi");
   const unitPattern = /\b(\d+)\s+units?\s+of\s+([A-Z0-9][A-Z0-9-]{3,})\b/gi;
   const found: QuantitySpan[] = [];
   for (const match of withoutIndexes.matchAll(pattern)) {
     const quantity = boundedQuantity(Number(match[1]));
-    if (quantity == null || match.index == null || !match[4]) continue;
-    const phrase = [match[2], match[3], match[4]].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
-    found.push({ quantity, phrase, index: match.index, length: match[0].length, accessory: isAccessoryPhrase(match[4]) });
+    if (quantity == null || match.index == null || !match[2]) continue;
+    const phrase = (match[2] ?? "").replace(/\s+/g, " ").trim();
+    found.push({ quantity, phrase, index: match.index, length: match[0].length, accessory: isAccessoryPhrase(phrase) });
   }
   for (const match of withoutIndexes.matchAll(unitPattern)) {
     const quantity = boundedQuantity(Number(match[1]));
@@ -296,6 +306,7 @@ function productTypeForPhrase(phrase: string) {
   if (/\bmonitors?\b/i.test(phrase)) return "Monitor";
   if (/\bprinters?\b/i.test(phrase)) return "Printer";
   if (/\bdesks?\b/i.test(phrase)) return "Desk";
+  if (/\bchairs?\b/i.test(phrase)) return "Chair";
   return "";
 }
 
@@ -303,7 +314,7 @@ function isComputerSpecLine(line: string) {
   return /\b(core\s+i[3579]|core\s+ultra|ryzen\s+[3579]|\d+\s*gb(?:\s+ddr\d+)?\s*(?:ram|memory)|\d+\s*(?:gb|tb)(?:\s+pcie)?\s*(?:ssd|nvme|hdd)|windows\s*11|\d+(?:\.\d+)?\s*-?\s*inch)\b/i.test(line);
 }
 
-function extractGroupedRequirements(body: string): ProductRequirement[] {
+function extractGroupedRequirements(body: string, includeWhole: boolean): ProductRequirement[] {
   const lines = body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const groups: string[][] = [];
   let current: string[] = [];
@@ -312,7 +323,7 @@ function extractGroupedRequirements(body: string): ProductRequirement[] {
     current = [];
   };
   for (const line of lines) {
-    if (/^(regards|thanks|thank you|kind regards)\b/i.test(line)) {
+    if (/^(regards|thanks|thank you|kind regards)\b/i.test(line) || line.includes("\t") || line.includes("|")) {
       flush();
       continue;
     }
@@ -331,7 +342,7 @@ function extractGroupedRequirements(body: string): ProductRequirement[] {
   }
   flush();
   const grouped = groups.map((group) => requirementFromText(group.join("\n"))).filter(requirementIsUseful);
-  if (grouped.length > 0) return grouped;
+  if (grouped.length > 0 || !includeWhole) return grouped;
   const whole = requirementFromText(body);
   return requirementIsUseful(whole) ? [whole] : [];
 }
@@ -343,6 +354,10 @@ export function parseRequirementFragment(text: string): ProductRequirement | nul
 
 function requirementIsUseful(item: ProductRequirement) {
   return item.quantity != null || Boolean(item.model || item.sku || item.productType);
+}
+
+function heldLabel(requirement: ProductRequirement) {
+  return requirementSummary(requirement) || requirement.productType || requirement.requestedText.replace(/\s+/g, " ").trim().slice(0, 80) || "An item";
 }
 
 export function requirementSummary(requirement: ProductRequirement) {
@@ -359,6 +374,7 @@ export function requirementSummary(requirement: ProductRequirement) {
 
 export function requirementIsVague(requirement: ProductRequirement) {
   if (ACCESSORY_TYPES.has(requirement.productType)) return false;
+  if (requirement.productType && requirement.productType !== "Laptop" && requirement.productType !== "Workstation" && requirement.productType !== "Server") return false;
   if (isRecommendationRequest(requirement.requestedText) && (requirement.productType || /\blaptops?|notebooks?|servers?|switches?\b/i.test(requirement.requestedText))) return false;
   if (requirement.sku || requirement.mpn || requirement.model) return false;
   const specified = [requirement.processor, requirement.ramGb, requirement.storageGb, requirement.operatingSystem, requirement.screenInches, requirement.graphics].filter((value) => value != null && value !== "").length;
@@ -461,12 +477,13 @@ export function planSourcing(input: {
   if (input.requirements.length === 0) {
     return { kind: "SOURCING", message: SOURCING_REPLY, note: "The request did not state a quantity and a product or specification, so sourcing is still open." };
   }
-  if (input.requirements.some(requirementIsVague)) {
+  const concrete = input.requirements.filter((requirement) => !requirementIsVague(requirement));
+  if (concrete.length === 0) {
     return { kind: "CLARIFICATION", message: CLARIFICATION_REPLY };
   }
   const priced: PricedSource[] = [];
-  const held: string[] = [];
-  for (const requirement of input.requirements) {
+  const held: string[] = input.requirements.filter(requirementIsVague).map((requirement) => `${heldLabel(requirement)} was not specific enough to source, so it is waiting for internal review.`);
+  for (const requirement of concrete) {
     if (requirement.quantity == null && !isRecommendationRequest(requirement.requestedText)) {
       held.push("A quantity was not tied to every requested item.");
       continue;
@@ -474,7 +491,7 @@ export function planSourcing(input: {
     const found = chooseSources(requirement, input.pools, now, freshnessMs, input);
     if (found.blocked) return { kind: "STAFF_REVIEW", note: found.blocked };
     if (found.options.length === 0) {
-      held.push(`${requirementSummary(requirement) || requirement.productType || "An item"} has no verified source yet.`);
+      held.push(`${heldLabel(requirement)} has no verified source yet.`);
       continue;
     }
     priced.push(...found.options);
@@ -538,6 +555,8 @@ function firstStage(requirement: ProductRequirement, candidates: SourcingCandida
   if (!rejected && requirement.model) stages.push({ limit: 1, match: (candidate) => fuzzyModel(requirement, candidate) });
   const identityRequested = Boolean(requirement.sku || requirement.mpn || requirement.model);
   if (!(rejected && identityRequested)) stages.push({ limit: 1, match: (candidate) => specificationMatch(requirement, candidate) });
+  if (!rejected && !hasComparableSpecs(requirement)) stages.push({ limit: 1, match: (candidate) => statedSpecificationMatch(requirement, candidate) });
+  if (!rejected && !hasComparableSpecs(requirement)) stages.push({ limit: 1, match: (candidate) => productTypeNameMatch(requirement, candidate) });
   if (!rejected && ACCESSORY_TYPES.has(requirement.productType)) stages.push({ limit: 1, match: (candidate) => accessoryNameMatch(requirement, candidate) });
   if (!rejected) stages.push({ limit: 1, match: (candidate) => suitableAlternative(requirement, candidate) });
   for (const stage of stages) {
@@ -666,6 +685,31 @@ function fuzzyModel(requirement: ProductRequirement, candidate: SourcingCandidat
   if (tokens.length === 0) return false;
   const hay = `${candidate.name} ${candidate.model} ${candidate.sku}`.toLowerCase();
   return tokens.every((token) => hay.includes(token));
+}
+
+function specificationTokens(text: string) {
+  return [...new Set((text.match(/\b\d+(?:\.\d+)?\s*(?:ppm|mm|cm|inch|inches|gb|tb|w)\b|\bA[0-4]\b|\bduplex\b/gi) ?? []).map((token) => token.toLowerCase().replace(/\s+/g, "")))];
+}
+
+function productNoun(requirement: ProductRequirement) {
+  const noun = requirement.productType.toLowerCase().split(/\s+/)[0] ?? "";
+  return noun.length >= 4 ? noun : "";
+}
+
+function productTypeNameMatch(requirement: ProductRequirement, candidate: SourcingCandidate) {
+  const noun = productNoun(requirement);
+  if (!noun || hasComparableSpecs(requirement) || ["laptop", "workstation", "server"].includes(noun)) return false;
+  if (specificationTokens(requirement.requestedText).length > 0) return false;
+  return `${candidate.name} ${candidate.model}`.toLowerCase().includes(noun);
+}
+
+function statedSpecificationMatch(requirement: ProductRequirement, candidate: SourcingCandidate) {
+  const noun = productNoun(requirement);
+  if (!noun || hasComparableSpecs(requirement)) return false;
+  const haystack = `${candidate.name} ${candidate.model} ${candidate.specifications}`.toLowerCase().replace(/\s+/g, "");
+  const wanted = specificationTokens(requirement.requestedText);
+  if (!haystack.includes(noun) || wanted.length === 0) return false;
+  return wanted.every((token) => haystack.includes(token));
 }
 
 function specificationMatch(requirement: ProductRequirement, candidate: SourcingCandidate) {
@@ -874,9 +918,7 @@ function requirementFromText(text: string): ProductRequirement {
   requirement.colour = text.match(/\b(black|silver|grey|gray|white)\b/i)?.[1] ?? "";
   const brand = text.match(/\b(lenovo|hp|dell|asus|acer|apple|microsoft)\b/i)?.[1] ?? "";
   requirement.brandPreference = brand ? brand[0].toUpperCase() + brand.slice(1).toLowerCase() : "";
-  if (/\blaptops?|notebooks?\b/i.test(text)) requirement.productType = "Laptop";
-  else if (/\bservers?\b/i.test(text)) requirement.productType = "Server";
-  else if (/\bswitches?\b/i.test(text)) requirement.productType = "Switch";
+  requirement.productType = productTypeForPhrase(text);
   const model = text.match(/\b((?:thinkpad|latitude|alienware|probook|elitebook|precision|inspiron|xps)\s+[a-z]?\d{2,4}[a-z0-9]*)\b/i)?.[0] ?? "";
   requirement.model = model;
   const labelled = text.match(/\b(?:sku|mpn|part(?:\s*number)?)\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{2,})\b/i)?.[1] ?? "";
@@ -893,7 +935,7 @@ function quantityFrom(text: string) {
   const stripped = stripSpecNumbers(text);
   const explicit = stripped.match(/\b(\d+)\s*[x×]\b/i)
     ?? stripped.match(/\b(?:quote|quotation|supply(?:\s+of)?|order(?:\s+of)?|need|pricing|qty|quantity)\s+(?:for\s+|the\s+)?(\d+)\b/i)
-    ?? stripped.match(new RegExp(`\\b(\\d+)\\s+(?:additional\\s+|extra\\s+|replacement\\s+)?(?:business\\s+|professional\\s+|laptop\\s+)?(?:${QUANTITY_NOUN})\\b`, "i"));
+    ?? stripped.match(new RegExp(`\\b(\\d+)\\s+(?:(?:additional|extra|replacement|more|business|professional|office|task|ergonomic|executive|laser|colour|color|laptop)\\s+){0,3}(?:${QUANTITY_NOUN})\\b`, "i"));
   if (explicit?.[1]) return boundedQuantity(Number(explicit[1]));
   const word = stripped.match(/\b(?:quote|supply|order|need|for)\s+(one|two|three|four|five|six|seven|eight|nine|ten|twenty)\b/i);
   if (word?.[1]) return NUMBER_WORDS[word[1].toLowerCase()] ?? null;

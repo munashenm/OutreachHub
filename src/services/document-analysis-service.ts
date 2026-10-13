@@ -49,7 +49,10 @@ export async function listTenderAnalyses(workspaceId: string, rfqId: string) {
 
 export async function analysisTextForRfq(rfqId: string) {
   const rows = await getDb().tenderAnalysis.findMany({ where: { rfqId }, select: { analysis: true } });
-  return rows.map((row) => analysisAsRequirementText(asAnalysis(row.analysis))).filter(Boolean).join("\n");
+  return rows.map((row) => {
+    const analysis = asAnalysis(row.analysis);
+    return analysis.sourceText.trim() || analysisAsRequirementText(analysis);
+  }).filter(Boolean).join("\n");
 }
 
 export async function responseModeForRfq(rfqId: string): Promise<ResponseMode | ""> {

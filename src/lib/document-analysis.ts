@@ -52,6 +52,7 @@ export type DocumentAnalysisRecord = {
   ambiguities: string[];
   warnings: string[];
   sources: Array<{ field: string; sourceDocument: string; sourcePage: number | null }>;
+  sourceText: string;
 };
 
 export type DocumentPage = { page: number; text: string };
@@ -120,6 +121,7 @@ const EMPTY_ANALYSIS: DocumentAnalysisRecord = {
   ambiguities: [],
   warnings: [],
   sources: [],
+  sourceText: "",
 };
 
 export function supportedAttachment(filename: string, contentType: string) {
@@ -153,7 +155,7 @@ export function classifyDocument(input: { filename: string; text: string }): Doc
 export function analyseDocumentText(input: { filename: string; pages: DocumentPage[] }): DocumentAnalysisRecord {
   const pages = input.pages.length > 0 ? input.pages : [{ page: 1, text: "" }];
   const text = pages.map((page) => page.text).join("\n");
-  const record: DocumentAnalysisRecord = { ...EMPTY_ANALYSIS, items: [], sources: [], warnings: [], ambiguities: [] };
+  const record: DocumentAnalysisRecord = { ...EMPTY_ANALYSIS, items: [], sources: [], warnings: [], ambiguities: [], sourceText: text.slice(0, 12000) };
   record.documentType = classifyDocument({ filename: input.filename, text });
   record.requestTitle = firstLine(text).slice(0, 200);
   const reference = labeled(pages, ["tender no", "tender number", "rfq no", "rfq number", "reference", "bid no", "enquiry no"]);
@@ -371,7 +373,7 @@ function lineItem(filename: string, page: number, line: string, fallbackNumber: 
   const numbered = trimmed.match(/^(\d+)[.)]\s+(.+)$/);
   const body = (numbered?.[2] ?? trimmed).trim();
   const quantified = body.match(/^(\d+)\s*[x×]\s+(.+)$/i);
-  const prose = body.match(/\b(\d+)\s+(?:(?:additional|extra|replacement|more)\s+)?((?:laptop\s+)?(?:power\s+supplies|power\s+supply|chargers?|adapters?|laptops?|notebooks?|servers?|switches?|monitors?|printers?).*)/i);
+  const prose = body.match(/\b(\d+)\s+(?:(?:additional|extra|replacement|more)\s+)?((?:laptop\s+|office\s+)?(?:power\s+supplies|power\s+supply|chargers?|adapters?|cables?|docks?|laptops?|notebooks?|workstations?|servers?|switches?|monitors?|printers?|desks?|chairs?).*)/i);
   const quantityText = quantified?.[1] ?? prose?.[1] ?? "";
   const quantity = /^\d+$/.test(quantityText) ? Number(quantityText) : null;
   const description = (quantified?.[2] ?? body).trim();
