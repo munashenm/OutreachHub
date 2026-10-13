@@ -34,7 +34,7 @@ export function configuredSearchProvider(env: Record<string, string | undefined>
 export function externalSearchQuery(requirement: ProductRequirement) {
   if (requirement.sku) return `${requirement.sku} South Africa price`;
   if (requirement.mpn) return `${requirement.mpn} South Africa price`;
-  return [
+  const described = [
     requirement.productType || requirement.formFactor,
     requirement.brandPreference,
     requirement.processor,
@@ -42,8 +42,10 @@ export function externalSearchQuery(requirement: ProductRequirement) {
     requirement.storageGb ? `${requirement.storageGb}GB ${requirement.storageType || "SSD"}` : "",
     requirement.operatingSystem,
     requirement.screenInches ? `${requirement.screenInches} inch` : "",
-    "South Africa",
-  ].filter(Boolean).join(" ");
+  ].filter(Boolean);
+  if (described.length > 0) return `${described.join(" ")} South Africa`;
+  const words = requirement.requestedText.replace(/\b(please|kindly|also|quote|quotation|for|the|and|of|a|an)\b/gi, " ").replace(/\s+/g, " ").trim();
+  return `${words || "product"} South Africa`.slice(0, 160);
 }
 
 export function rankExternalUrls(hits: SearchHit[]): RankedPage[] {

@@ -144,12 +144,12 @@ export async function analyzeInboundEmail(input: { subject: string; body: string
     const json = await response.json() as unknown;
     const text = outputText(json);
     if (!text) {
-      logAiUse({ purpose: "extraction", invoked: true, success: false, reviewReason: "The model returned no structured extraction." });
+      logAiUse({ purpose: "extraction", invoked: true, success: false, reviewReason: "The model returned no structured extraction.", ...tokenUse(json) });
       return null;
     }
     const parsed = parseRfqAnalysis(JSON.parse(text) as unknown);
     const grounded = parsed ? groundRfqAnalysis(parsed, source) : null;
-    logAiUse({ purpose: "extraction", invoked: true, success: Boolean(grounded && grounded.items.length > 0), reviewReason: grounded?.items.length ? "extracted" : "No grounded product line was returned." });
+    logAiUse({ purpose: "extraction", invoked: true, success: Boolean(grounded && grounded.items.length > 0), reviewReason: grounded?.items.length ? "extracted" : "No grounded product line was returned.", ...tokenUse(json) });
     return grounded;
   } catch {
     logAiUse({ purpose: "extraction", invoked: true, success: false, reviewReason: "The model request did not complete." });
@@ -194,8 +194,16 @@ export async function completeStructured(input: { instructions: string; content:
   }
 }
 
-export function logAiUse(entry: { purpose: string; invoked: boolean; success: boolean; reviewReason: string }) {
-  console.info(`[RFQ-AI] purpose=${entry.purpose} invoked=${entry.invoked} success=${entry.success} review=${entry.reviewReason.replace(/\s+/g, " ").slice(0, 180)}`);
+export function logAiUse(entry: { purpose: string; invoked: boolean; success: boolean; reviewReason: string; inputTokens?: number; outputTokens?: number }) {
+  const tokens = entry.inputTokens == null ? "" : ` input_tokens=${entry.inputTokens} output_tokens=${entry.outputTokens ?? 0}`;
+  console.info(`[RFQ-AI] purpose=${entry.purpose} invoked=${entry.invoked} success=${entry.success} review=${entry.reviewReason.replace(/\s+/g, " ").slice(0, 180)}${tokens}`);
+}
+
+function tokenUse(json: unknown) {
+  if (!json || typeof json !== "object" || !("usage" in json)) return {};
+  const usage = (json as { usage?: { input_tokens?: number; output_tokens?: number } }).usage;
+  if (!usage) return {};
+  return { inputTokens: usage.input_tokens ?? 0, outputTokens: usage.output_tokens ?? 0 };
 }
 
 export function confidenceLevel(confidence: number): "AUTO" | "REVIEW" | "LOW" {

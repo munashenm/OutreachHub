@@ -17,6 +17,9 @@ test("builds a specification query and keeps the search provider unset until a k
   assert.equal(requirement.processor, "Core i5");
   assert.equal(requirement.ramGb, 16);
   assert.equal(externalSearchQuery(requirement), "Laptop Core i5 16GB RAM 512GB SSD Windows 11 Pro 14 inch South Africa");
+  const scanner = extractProductRequirements("Also quote 2 barcode scanners.")[0];
+  assert.match(externalSearchQuery(scanner!), /barcode scanners/i);
+  assert.match(externalSearchQuery(scanner!), /South Africa/);
   assert.equal(configuredSearchProvider({}), null);
   assert.equal(configuredSearchProvider({ BRAVE_SEARCH_API_KEY: "present" }), "brave");
   assert.match(SEARCH_PROVIDER_DEPENDENCY, /BRAVE_SEARCH_API_KEY/);

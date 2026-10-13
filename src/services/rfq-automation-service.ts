@@ -555,13 +555,28 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     };
   }
   let plan = planSourcing({ requirements, pools, ...margins });
-  if (plan.kind === "SOURCING" && !searchedOnline) {
-    const live = await sourceExternalForRequirements(workspace.id, requirements.filter((requirement) => requirement.quantity != null).slice(0, 2));
-    if (live.candidates.length > 0) {
-      pools = { ...pools, external: [...pools.external, ...live.candidates] };
-      plan = planSourcing({ requirements, pools, ...margins });
+  if (!searchedOnline) {
+    const pending = plan.kind === "QUOTE"
+      ? requirements.filter((requirement) => plan.outstanding.some((item) => item.requestedText === requirement.requestedText))
+      : plan.kind === "SOURCING"
+        ? requirements.filter((requirement) => requirement.quantity != null)
+        : [];
+    if (pending.length > 0) {
+      const live = await sourceExternalForRequirements(workspace.id, pending.slice(0, 4));
+      if (live.candidates.length > 0) {
+        pools = { ...pools, external: [...pools.external, ...live.candidates] };
+        plan = planSourcing({ requirements, pools, ...margins });
+      }
+      if (plan.kind === "SOURCING") plan = { ...plan, note: live.note };
+      if (plan.kind === "QUOTE" && plan.outstanding.length > 0 && live.note) {
+        const evidence = live.note.replace(/\s+/g, " ").slice(0, 500);
+        plan = {
+          ...plan,
+          outstanding: plan.outstanding.map((item) => ({ ...item, reason: `${item.reason} ${evidence}`.slice(0, 500) })),
+          note: `${plan.note} ${evidence}`.slice(0, 2000),
+        };
+      }
     }
-    if (plan.kind === "SOURCING") plan = { ...plan, note: live.note };
   }
   if (plan.kind === "CLARIFICATION" || plan.kind === "STAFF_REVIEW") {
     const note = plan.kind === "CLARIFICATION" ? plan.message : plan.note;
@@ -640,7 +655,9 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     await db.quoteLine.deleteMany({ where: { quoteId: draft.id } });
     if (sales) await db.quote.update({ where: { id: draft.id }, data: { confidenceScore: sales.confidence } });
   }
-  if (rankedOptions.length > 1) {
+  const lineKeys = new Set(rankedOptions.map((option) => option.lineKey).filter(Boolean));
+  const alternatives = lineKeys.size <= 1 && rankedOptions.length > 1;
+  if (alternatives) {
     const alternativeNote = "These are alternative options. Choose one. The option totals are not added together.";
     await db.quote.update({ where: { id: draft.id }, data: { notes: [draft.notes, alternativeNote].filter(Boolean).join("\n") } });
   }
@@ -651,7 +668,7 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
         workspaceId: workspace.id,
         quoteId: draft.id,
         productId: option.productId,
-        description: rankedOptions.length > 1 ? `OPTION ${index + 1} – ${tier}: ${option.name}` : option.name,
+        description: alternatives ? `OPTION ${index + 1} – ${tier}: ${option.name}` : option.name,
         quantity: new Prisma.Decimal(option.quantity.toFixed(2)),
         unitPriceCents: option.unitPriceCents,
         specifications: option.specifications,
@@ -663,9 +680,30 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
       },
     });
   }
+  for (const item of plan.outstanding) {
+    await db.quoteLine.create({
+      data: {
+        workspaceId: workspace.id,
+        quoteId: draft.id,
+        description: item.label.slice(0, 500),
+        quantity: new Prisma.Decimal((item.quantity ?? 0).toFixed(2)),
+        unitPriceCents: 0,
+        specifications: item.reason.slice(0, 2000),
+        requirementText: item.requestedText.slice(0, 2000),
+        sourceUrl: item.sourceUrl,
+        costStatus: "OUTSTANDING",
+        availability: "Not quoted",
+      },
+    });
+  }
   await db.rfq.update({ where: { id: rfq.id }, data: { status: "PRICED", lastPricedAt: new Date(), automationNote: plan.note } });
   await recordRfqEvent(workspace.id, rfq.id, "PRICED", "PRICED", plan.note);
   await generateQuotePdf(workspace.id, draft.id);
+  if (plan.outstanding.length > 0) {
+    await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: plan.note, quoteBlockedReason: plan.note } });
+    await recordRfqEvent(workspace.id, rfq.id, "REVIEW_REQUIRED", "REVIEWING", plan.note);
+    return respond({ planKind: "QUOTE", planSend: false, catalogueProductNamed: true });
+  }
   await db.rfq.update({ where: { id: rfq.id }, data: { status: "QUOTE_READY", automationNote: plan.note } });
   await recordRfqEvent(workspace.id, rfq.id, "PDF_GENERATED", "QUOTE_READY", plan.note);
   if (requirements.some((requirement) => requirement.quantity == null)) {

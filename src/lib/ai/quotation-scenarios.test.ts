@@ -285,6 +285,7 @@ test("scenario C prices the stocked product and holds the live online product", 
   assert.equal(plan.send, false);
   assert.equal(plan.options.some((option) => option.name.includes("ThinkPad")), true);
   assert.equal(plan.options.some((option) => /adapter/i.test(option.name)), false);
+  assert.equal(plan.outstanding.some((item) => /adapter/i.test(item.label)), true);
   const pdf = await preparedPdf(plan.options.map((option) => ({
     description: option.name,
     quantity: option.quantity,

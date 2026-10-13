@@ -200,6 +200,9 @@ Also quote 2 barcode scanners.`;
   assert.equal(chairOption?.quantity, 6);
   assert.equal(chairOption?.unitPriceCents, 112_000);
   assert.equal(plan.options.some((option) => /scanner/i.test(option.name)), false);
+  assert.equal(plan.outstanding.length, 1);
+  assert.equal(plan.outstanding[0]?.quantity, 2);
+  assert.match(plan.outstanding[0]?.label ?? "", /scanner/i);
 
   const lines = plan.options.map((option) => ({
     description: option.name,
@@ -216,6 +219,21 @@ Also quote 2 barcode scanners.`;
     matchGrade: option.match,
     costStatus: option.costStatus,
   }));
+  lines.push({
+    description: plan.outstanding[0]?.label ?? "Barcode scanner",
+    quantity: plan.outstanding[0]?.quantity ?? 2,
+    unitPriceCents: 0,
+    specifications: plan.outstanding[0]?.reason ?? "",
+    sku: "",
+    modelName: "",
+    manufacturerPartNumber: "",
+    availability: "Not quoted",
+    leadTime: "",
+    warranty: "",
+    requirementText: plan.outstanding[0]?.requestedText ?? "",
+    matchGrade: "",
+    costStatus: "OUTSTANDING",
+  });
   const totals = quotationTotals(lines);
   const subtotal = (560_000 * 3) + (210_000 * 4) + (112_000 * 6);
   assert.equal(totals?.subtotalExclCents, subtotal);
@@ -240,13 +258,18 @@ Also quote 2 barcode scanners.`;
   const pdf = await renderQuotationPdf(document);
   const decoded = [...pdf.toString("latin1").matchAll(/<([0-9A-Fa-f]+)>/g)].map((match) => Buffer.from(match[1], "hex").toString("latin1")).join("");
   assert.equal(pdf.subarray(0, 5).toString(), "%PDF-");
-  assert.equal(decoded.includes("QUOTATION"), true);
+  assert.equal(document.internalDraft, true);
+  assert.equal(document.outstanding.length, 1);
+  assert.equal(decoded.includes("INTERNAL DRAFT"), true);
+  assert.equal(decoded.includes("OUTSTANDING"), true);
+  assert.equal(decoded.toLowerCase().includes("scanner"), true);
   assert.equal(decoded.includes("printer"), true);
   assert.equal(decoded.includes("1400mm"), true);
   assert.equal(decoded.includes("chair"), true);
-  assert.equal(decoded.toLowerCase().includes("scanner"), false);
-  const signed = withClientSignature(quoteCoverEmail({ customerName: "Lerato Dlamini", quoteNumber: document.numberLabel, validUntil }));
-  assert.match(signed.body, /Urban Focus quotation/);
+  const signed = withClientSignature(quoteCoverEmail({ customerName: "Lerato Dlamini", quoteNumber: document.numberLabel, validUntil, outstanding: document.outstanding.map((item) => item.label) }));
+  assert.match(signed.body, /not ready to send/);
+  assert.match(signed.body, /scanner/i);
+  assert.match(signed.body, /Internal draft/);
   assert.match(signed.body, /sales@urbanfocus.co.za/);
   const response = determineInitialResponse({
     quotationRequest: true,

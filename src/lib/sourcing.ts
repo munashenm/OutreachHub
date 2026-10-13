@@ -92,13 +92,22 @@ export type PricedSource = {
   canSend: boolean;
   stockQty: number | null;
   productId: string | null;
+  lineKey?: string;
+};
+
+export type OutstandingItem = {
+  label: string;
+  requestedText: string;
+  quantity: number | null;
+  reason: string;
+  sourceUrl: string;
 };
 
 export type SourcingPlan =
   | { kind: "CLARIFICATION"; message: string }
   | { kind: "SOURCING"; message: string; note: string }
   | { kind: "STAFF_REVIEW"; note: string }
-  | { kind: "QUOTE"; send: boolean; note: string; options: PricedSource[] };
+  | { kind: "QUOTE"; send: boolean; note: string; options: PricedSource[]; outstanding: OutstandingItem[] };
 
 const NUMBER_WORDS: Record<string, number> = {
   one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twenty: 20,
@@ -482,34 +491,47 @@ export function planSourcing(input: {
     return { kind: "CLARIFICATION", message: CLARIFICATION_REPLY };
   }
   const priced: PricedSource[] = [];
-  const held: string[] = input.requirements.filter(requirementIsVague).map((requirement) => `${heldLabel(requirement)} was not specific enough to source, so it is waiting for internal review.`);
+  const outstanding: OutstandingItem[] = input.requirements.filter(requirementIsVague).map((requirement) => outstandingItem(requirement, "The request was not specific enough to source."));
   for (const requirement of concrete) {
     if (requirement.quantity == null && !isRecommendationRequest(requirement.requestedText)) {
-      held.push("A quantity was not tied to every requested item.");
+      outstanding.push(outstandingItem(requirement, "A quantity was not tied to this item."));
       continue;
     }
     const found = chooseSources(requirement, input.pools, now, freshnessMs, input);
     if (found.blocked) return { kind: "STAFF_REVIEW", note: found.blocked };
     if (found.options.length === 0) {
-      held.push(`${heldLabel(requirement)} has no verified source yet.`);
+      outstanding.push(outstandingItem(requirement, "No verified source has been found yet."));
       continue;
     }
-    priced.push(...found.options);
+    const lineKey = `${requirement.productType}|${requirement.quantity ?? ""}|${requirement.model}|${requirement.sku}`;
+    priced.push(...found.options.map((option) => ({ ...option, lineKey })));
   }
   if (priced.length === 0) {
-    if (held.some((note) => note.startsWith("A quantity"))) {
+    if (outstanding.some((item) => item.reason.startsWith("A quantity"))) {
       return { kind: "STAFF_REVIEW", note: "The specification was read. The quantity was not tied to the product, so the customer was not emailed." };
     }
-    return { kind: "SOURCING", message: SOURCING_REPLY, note: held[0] || "No in-stock source meets the specification yet. Sourcing is continuing." };
+    return { kind: "SOURCING", message: SOURCING_REPLY, note: outstanding.map((item) => `${item.label}: ${item.reason}`).join(" ") || "No in-stock source meets the specification yet. Sourcing is continuing." };
   }
   const options = collapseIdenticalOptions(priced);
   const catalogueBacked = options.every((option) => option.sourceKind !== "EXTERNAL_SOURCE");
-  const send = held.length === 0 && options.length > 0 && options.every((option) => option.canSend) && catalogueBacked;
+  const send = outstanding.length === 0 && options.length > 0 && options.every((option) => option.canSend) && catalogueBacked;
+  const held = outstanding.map((item) => `${item.label}: ${item.reason}`);
   return {
     kind: "QUOTE",
     send,
     note: held.length > 0 ? `Held for internal approval. ${held.join(" ")}` : send ? "A catalogue or supplier product meets the request, so the quotation can be sent." : "A sourced quotation is ready for approval. Indicative online prices are not a binding quotation.",
     options: options.slice(0, 8),
+    outstanding,
+  };
+}
+
+function outstandingItem(requirement: ProductRequirement, reason: string): OutstandingItem {
+  return {
+    label: heldLabel(requirement),
+    requestedText: requirement.requestedText,
+    quantity: requirement.quantity,
+    reason,
+    sourceUrl: "",
   };
 }
 

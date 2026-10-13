@@ -4,6 +4,7 @@ import {
   configuredSearchProvider,
   externalSearchQuery,
   listingRejection,
+  observeProductPage,
   parseProductPage,
   rankExternalUrls,
   type SearchHit,
@@ -37,7 +38,9 @@ export async function sourceExternalForRequirements(workspaceId: string, require
         const html = await readPage(page.url);
         const parsed = parseProductPage(html, page.url);
         if (!parsed.listing) {
-          notes.push(`Rejected ${page.url}: ${parsed.reason}`);
+          const observed = observeProductPage(html, page.url);
+          const listed = observed.product?.listedPriceCents;
+          notes.push(listed ? `Evidence ${observed.product?.name} at ${page.url}: listed ${listed} cents ZAR. ${parsed.reason} No selling price was calculated.` : `Rejected ${page.url}: ${parsed.reason}`);
           continue;
         }
         const reason = listingRejection(requirement, parsed.listing, page.url);
