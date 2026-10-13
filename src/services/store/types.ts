@@ -33,5 +33,6 @@ export interface StoreProvider {
   setPublished(sku: string, published: boolean): Promise<void>;
   listOrders(limit: number): Promise<unknown>;
   listCatalogue(page: number, perPage: number): Promise<unknown>;
+  searchCatalogue(query: { q?: string; sku?: string; mpn?: string }): Promise<unknown | null>;
   findByIdentity(query: { sku?: string; mpn?: string; barcode?: string }): Promise<{ sku: string; storeProductId?: string } | null>;
 }

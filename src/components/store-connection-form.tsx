@@ -1,8 +1,8 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { pushStoreStockAction, saveStoreConnectionAction, testStoreConnectionAction } from "@/actions/stock-actions";
-import { Field, buttonPrimary, buttonSecondary, inputClass } from "@/components/ui";
+import { saveStoreConnectionAction, testStoreConnectionAction } from "@/actions/stock-actions";
+import { Field, buttonSecondary, inputClass } from "@/components/ui";
 import { initialActionState } from "@/lib/format";
 
 export function StoreConnectionForm({
@@ -29,8 +29,6 @@ export function StoreConnectionForm({
   const [state, action, pending] = useActionState(saveStoreConnectionAction, initialActionState);
   const [testing, setTesting] = useState(false);
   const [testMessage, setTestMessage] = useState<string>();
-  const [pushing, setPushing] = useState(false);
-  const [pushMessage, setPushMessage] = useState<string>();
   return (
     <div className="space-y-4">
       <form action={action} className="grid max-w-xl gap-3">
@@ -80,23 +78,8 @@ export function StoreConnectionForm({
         >
           {testing ? "Testing..." : "Test connection"}
         </button>
-        <button
-          type="button"
-          className={buttonPrimary}
-          disabled={pushing || !connected}
-          onClick={() => {
-            setPushing(true);
-            void pushStoreStockAction().then((result) => {
-              setPushMessage(result.error ?? result.success);
-              setPushing(false);
-            });
-          }}
-        >
-          {pushing ? "Sending..." : "Send catalogue to the store"}
-        </button>
       </div>
       {testMessage ? <p className="text-sm text-muted">{testMessage}</p> : null}
-      {pushMessage ? <p className="text-sm text-muted">{pushMessage}</p> : null}
     </div>
   );
 }

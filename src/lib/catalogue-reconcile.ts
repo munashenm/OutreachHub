@@ -12,6 +12,7 @@ export type ParsedStoreProduct = {
   category: string;
   unitPriceCents: number;
   salePriceCents: number | null;
+  costExVatCents: number | null;
   currency: string;
   stockQuantity: number;
   stockStatus: string;
@@ -299,6 +300,7 @@ function parseStoreProduct(entry: unknown): ParsedStoreProduct | { error: string
   if (salePriceCents === null && record.salePriceCents !== null && record.salePriceCents !== undefined) {
     return { error: "A store product has a sale price that could not be read." };
   }
+  const costExVatCents = optionalCost(record.costExVatCents);
   const updatedAt = typeof record.updatedAt === "string" && !Number.isNaN(Date.parse(record.updatedAt)) ? new Date(record.updatedAt).toISOString() : null;
   return {
     storeProductId,
@@ -314,6 +316,7 @@ function parseStoreProduct(entry: unknown): ParsedStoreProduct | { error: string
     category: clip(record.category, 160),
     unitPriceCents,
     salePriceCents,
+    costExVatCents,
     currency: clip(record.currency, 3) || "ZAR",
     stockQuantity,
     stockStatus: clip(record.stockStatus, 40),
@@ -353,6 +356,12 @@ function clip(value: unknown, max: number) {
 
 function positiveInt(value: unknown) {
   return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 1_000_000 ? value : null;
+}
+
+function optionalCost(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const cents = nonNegativeInt(value);
+  return cents != null && cents > 0 ? cents : null;
 }
 
 function nonNegativeInt(value: unknown) {

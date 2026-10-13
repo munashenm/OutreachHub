@@ -88,6 +88,17 @@ export function createUrbanFocusStore(credentials: StoreCredentials): StoreProvi
       if (!response.ok) throw new AppError(`The store returned ${response.status}.`);
       return response.json() as Promise<unknown>;
     },
+    async searchCatalogue(query: { q?: string; sku?: string; mpn?: string }) {
+      const search: Record<string, string> = { page: "1", per_page: "40" };
+      if (query.q?.trim()) search.q = query.q.trim().slice(0, 160);
+      if (query.sku?.trim()) search.sku = query.sku.trim().slice(0, 80);
+      if (query.mpn?.trim()) search.mpn = query.mpn.trim().slice(0, 80);
+      if (!search.q && !search.sku && !search.mpn) return null;
+      const response = await request("catalogue", search, undefined, 20000);
+      if (response.status === 404) return null;
+      if (!response.ok) throw new AppError(`The store returned ${response.status}.`);
+      return response.json() as Promise<unknown>;
+    },
     async findByIdentity(query: { sku?: string; mpn?: string; barcode?: string }) {
       const search: Record<string, string> = {};
       if (query.sku?.trim()) search.sku = query.sku.trim();

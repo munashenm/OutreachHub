@@ -11,7 +11,6 @@ import { generateQuotePdf } from "./quotation-pdf-service";
 import { sendCustomerResponse } from "./reply-service";
 import { recordFunnel, scheduleQuoteFollowUp } from "./sales-response-service";
 import { markAnalysisApproved, responseModeForRfq } from "./document-analysis-service";
-import { queueStockForWebsite } from "./stock-sync-service";
 import { lowestCostsByProduct } from "./supplier-service";
 import { accessTokenForMailbox } from "./mailbox-service";
 import { searchGmailIds } from "./google-service";
@@ -232,7 +231,6 @@ export async function sendQuote(actor: Actor, rfqId: string, terms: { validDays:
       type: "QUOTE_SENT",
       summary: `Sent quotation ${quoteNumberLabel} for “${rfq.subject}”.`,
     });
-    await queueStockForWebsite(tx, actor.workspaceId, prepared.lines.map((line) => line.productId ?? ""));
   });
   const sentAt = new Date();
   await scheduleQuoteFollowUp(actor.workspaceId, prepared.id, sentAt);

@@ -1,8 +1,4 @@
-import { continueStorePushes, syncAllStockFeeds } from "@/services/stock-sync-service";
-import { pullAllStoreOrders } from "@/services/store-order-service";
-import { STOCK_PUSH_BUDGET_MS } from "@/lib/stock-drain";
-
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 export async function POST(request: Request) {
   const secret = process.env.CRON_SECRET;
@@ -10,9 +6,8 @@ export async function POST(request: Request) {
   if (!secret || header !== `Bearer ${secret}`) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
-  const deadlineAt = Date.now() + STOCK_PUSH_BUDGET_MS;
-  const pushOnly = request.headers.get("x-stock-sync") === "push";
-  const summary = pushOnly ? await continueStorePushes(deadlineAt) : await syncAllStockFeeds({ deadlineAt });
-  const orders = pushOnly ? [] : await pullAllStoreOrders();
-  return Response.json({ ...summary, orders });
+  return Response.json({
+    skipped: true,
+    reason: "OutreachHub does not sync supplier feeds or push a product catalogue to Urban Focus.",
+  });
 }

@@ -11,19 +11,14 @@ import { formatCents } from "@/lib/quote";
 import { displayedQuoteNumber } from "@/lib/quotation-document";
 import { replyTargets } from "@/lib/gmail-message";
 import type { RfqStatus } from "@/lib/labels";
-import { centsToInput } from "@/services/product-service";
-import { listProducts } from "@/services/product-service";
 import { quoteApprovalLimits, quotesForRfq } from "@/services/quote-service";
-import { lowestCostsByProduct } from "@/services/supplier-service";
-import { reservedByProduct } from "@/services/stock-sync-service";
-import { stockLeft } from "@/lib/stock";
 import { requireSession } from "@/services/auth-service";
 import { getThread } from "@/services/reply-service";
 import { getRfq } from "@/services/rfq-service";
 import { listTenderAnalyses, responseModeForRfq } from "@/services/document-analysis-service";
 
 function sourceLabel(kind: string) {
-  if (kind === "URBAN_FOCUS_CATALOGUE") return "Internal catalogue";
+  if (kind === "URBAN_FOCUS_CATALOGUE") return "Urban Focus";
   if (kind === "SUPPLIER_FEED" || kind === "SUPPLIER_API") return "Supplier";
   if (kind === "EXTERNAL_SOURCE") return "External";
   return "Not selected";
@@ -34,16 +29,13 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
   const { id } = await params;
   const rfq = await getRfq(session.workspace.id, id);
   if (!rfq) notFound();
-  const [thread, quotes, products, limits, analyses, documentMode] = await Promise.all([
+  const [thread, quotes, limits, analyses, documentMode] = await Promise.all([
     getThread(session.workspace.id, rfq.sourceMessageId),
     quotesForRfq(session.workspace.id, rfq.id),
-    listProducts(session.workspace.id),
     quoteApprovalLimits(session.workspace.id),
     listTenderAnalyses(session.workspace.id, rfq.id),
     responseModeForRfq(rfq.id),
   ]);
-  const costs = await lowestCostsByProduct(session.workspace.id, products.map((product) => product.id));
-  const reserved = await reservedByProduct(session.workspace.id);
   const target = replyTargets(rfq.sourceMessage);
   const draft = quotes.find((quote) => quote.status === "DRAFT");
   const sentQuotes = quotes.filter((quote) => quote.status === "SENT");
@@ -95,7 +87,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
               ))}
             </div>
           ) : <p className="mt-4 text-sm"><span className="text-muted">Sell price: </span>Not priced yet</p>}
-          <p className="mt-4 text-sm text-muted">Send Quote approves the priced option. Ask Customer uses the reply box when a detail is still missing. Search again checks the catalogue and supplier products and does not send another email. Manual Source is a line added on the quotation.</p>
+          <p className="mt-4 text-sm text-muted">Send Quote approves the priced option. Ask Customer uses the reply box when a detail is still missing. Search again checks Urban Focus, then online sources, and does not send another email. A manual line can still be added on the quotation.</p>
           <form action={rerunRfqAction} className="mt-3">
             <input type="hidden" name="id" value={rfq.id} />
             <button className={buttonSecondary}>Search again</button>
@@ -131,7 +123,7 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
       </Panel>
       <Panel className="p-5" id="quote">
         <h2 className="font-semibold">Quote</h2>
-        <p className="mt-1 text-sm text-muted">Lines are priced from the catalogue or typed in. The draft follows the current product specification and images. Sending uses the connected Gmail mailbox, stays in this thread, and keeps that copy on the quotation.</p>
+        <p className="mt-1 text-sm text-muted">Lines come from the Urban Focus search, online research, or a line typed here. Sending uses the connected Gmail mailbox, stays in this thread, and keeps that copy on the quotation.</p>
         {draft ? <p className="mt-2 text-sm">Confidence score: {draft.confidenceScore}</p> : null}
         <div className="mt-4">
           <QuotePanel
@@ -145,19 +137,11 @@ export default async function RfqDetailPage({ params }: { params: Promise<{ id: 
               quantity: Number(line.quantity).toString(),
               unitPriceCents: line.unitPriceCents,
               productId: line.productId,
-              costCents: line.productId ? costs.get(line.productId) ?? null : null,
-              specifications: line.product?.specifications ?? "",
-              imageUrls: line.product?.imageUrls ?? [],
+              costCents: null,
+              specifications: line.specifications || line.product?.specifications || "",
+              imageUrls: line.imageUrls.length > 0 ? line.imageUrls : line.product?.imageUrls ?? [],
             }))}
-            products={products.filter((product) => product.active).map((product) => ({
-              id: product.id,
-              sku: product.sku,
-              name: product.name,
-              unitPrice: centsToInput(product.unitPriceCents),
-              unitPriceCents: product.unitPriceCents,
-              costCents: costs.get(product.id) ?? null,
-              stockLeft: stockLeft(product.stockOnHand, reserved.get(product.id) ?? 0),
-            }))}
+            products={[]}
             subject={rfq.subject}
             customerName={rfq.prospect ? fullName(rfq.prospect.firstName, rfq.prospect.lastName) : ""}
             companyName={rfq.company?.companyName ?? ""}

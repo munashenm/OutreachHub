@@ -1,4 +1,4 @@
-# Separate Railway service. Do not attach this file to the web service.
+# Retired. Campaign sending no longer runs. This service can be removed.
 # Web service start command stays `npm start` with no cron schedule.
 
 [build]

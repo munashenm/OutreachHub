@@ -64,6 +64,7 @@ export type SourcingCandidate = {
   fresh: boolean;
   checkedAt: string | null;
   reputable: boolean;
+  imageUrls?: string[];
   vatKnown?: boolean;
   supplierClass?: SupplierClass;
   leadTimeDays?: number | null;
@@ -538,7 +539,7 @@ export function planSourcing(input: {
   return {
     kind: "QUOTE",
     send,
-    note: held.length > 0 ? `Held for internal approval. ${held.join(" ")}` : send ? "A catalogue or supplier product meets the request, so the quotation can be sent." : "A sourced quotation is ready for approval. Indicative online prices are not a binding quotation.",
+    note: held.length > 0 ? `Held for internal approval. ${held.join(" ")}` : send ? "An Urban Focus product meets the request, so the quotation can be sent." : "A sourced quotation is ready for approval. Indicative online prices are not a binding quotation.",
     options: options.slice(0, 8),
     outstanding,
   };

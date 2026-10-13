@@ -94,7 +94,7 @@ export function QuotePanel({
   return (
     <div className="space-y-4">
       {quotationNumber ? <p className="text-sm font-medium">Quotation No: {quotationNumber}</p> : null}
-      {lines.length === 0 ? <p className="text-sm text-muted">No quote lines yet. Choose a catalogue product or type a line.</p> : (
+      {lines.length === 0 ? <p className="text-sm text-muted">No quote lines yet. Search the enquiry again, or type a line.</p> : (
         <table className="data-table">
           <thead><tr><th>Description</th><th>Qty</th><th>Unit</th><th>Total</th><th></th></tr></thead>
           <tbody>
@@ -135,23 +135,25 @@ export function QuotePanel({
           <form action={formAction} className="grid gap-3 md:grid-cols-2">
             <input type="hidden" name="rfqId" value={rfqId} />
             <input type="hidden" name="productId" value={productId} />
-            <Field label="Catalogue product" name="productPick">
-              <select
-                className={inputClass}
-                value={productId}
-                onChange={(event) => {
-                  const id = event.target.value;
-                  setProductId(id);
-                  const product = products.find((item) => item.id === id);
-                  if (!product) return;
-                  setDescription(`${product.sku} ${product.name}`);
-                  setUnitPrice(product.unitPrice);
-                }}
-              >
-                <option value="">Custom line</option>
-                {products.map((product) => <option key={product.id} value={product.id}>{product.sku} — {product.name} ({product.stockLeft} left)</option>)}
-              </select>
-            </Field>
+            {products.length > 0 ? (
+              <Field label="Catalogue product" name="productPick">
+                <select
+                  className={inputClass}
+                  value={productId}
+                  onChange={(event) => {
+                    const id = event.target.value;
+                    setProductId(id);
+                    const product = products.find((item) => item.id === id);
+                    if (!product) return;
+                    setDescription(`${product.sku} ${product.name}`);
+                    setUnitPrice(product.unitPrice);
+                  }}
+                >
+                  <option value="">Custom line</option>
+                  {products.map((product) => <option key={product.id} value={product.id}>{product.sku} — {product.name} ({product.stockLeft} left)</option>)}
+                </select>
+              </Field>
+            ) : null}
             {selected?.costCents != null ? <p className="text-sm text-muted md:col-span-2">Selected supplier cost {formatCents(selected.costCents, currency)}. The unit price stays the catalogue sell price until you change it.</p> : null}
             {addBlock ? <p className="text-sm text-amber-900 md:col-span-2">{addBlock}</p> : null}
             <Field label="Description" name="description" error={state.fieldErrors?.description}>

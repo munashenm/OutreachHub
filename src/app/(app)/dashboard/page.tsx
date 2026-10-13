@@ -1,30 +1,22 @@
-import Link from "next/link";
 import { EmptyState, PageHeader, Panel, StatCard } from "@/components/ui";
 import { formatDateTime } from "@/lib/format";
-import { CAMPAIGN_STATUS_LABELS, LEAD_STATUS_LABELS } from "@/lib/labels";
-import { isShortStock } from "@/lib/stock";
+import { LEAD_STATUS_LABELS } from "@/lib/labels";
 import { requireSession } from "@/services/auth-service";
 import { getDashboard } from "@/services/dashboard-service";
-import { listProducts } from "@/services/product-service";
-import { getStoreConnection, reservedByProduct, supplierTrackedProductIds } from "@/services/stock-sync-service";
+import { getStoreConnection } from "@/services/stock-sync-service";
 
 export default async function DashboardPage() {
   const session = await requireSession();
-  const [data, products, reserved, tracked, store] = await Promise.all([
+  const [data, store] = await Promise.all([
     getDashboard(session.workspace.id),
-    listProducts(session.workspace.id),
-    reservedByProduct(session.workspace.id),
-    supplierTrackedProductIds(session.workspace.id),
     getStoreConnection(session.workspace.id),
   ]);
-  const shortStock = products.filter((product) => isShortStock(product.stockOnHand, reserved.get(product.id) ?? 0, tracked.has(product.id))).length;
-  const missingImages = products.filter((product) => product.active && product.imageUrls.length === 0).length;
   const mailboxHint = data.mailbox
     ? `${data.mailbox.email} · last inbound ${data.mailbox.lastInboundSyncAt ? formatDateTime(data.mailbox.lastInboundSyncAt) : "not yet"}${data.mailbox.lastError ? ` · ${data.mailbox.lastError}` : ""}`
     : "No Google mailbox connected.";
   const storeHint = store?.connected
-    ? `${store.status} · last sync ${store.lastSyncAt ? formatDateTime(store.lastSyncAt) : "not yet"}${store.lastError ? ` · ${store.lastError}` : ""}`
-    : "Store API is not connected.";
+    ? store.lastError ? store.lastError : "Urban Focus API is connected for product search."
+    : "Urban Focus API is not connected.";
   const maxPipeline = Math.max(...data.pipeline.map((item) => item.count), 1);
 
   return (
@@ -37,14 +29,10 @@ export default async function DashboardPage() {
         <StatCard label="New enquiries" value={data.newEnquiries} hint="Inbound mail still uncategorised or marked as a new enquiry." />
         <StatCard label="RFQs awaiting review" value={data.rfqsAwaitingReview} hint="RFQs at New or Reviewing." />
         <StatCard label="Replies today" value={data.repliesToday} hint="Inbound messages since midnight in Johannesburg." />
-        <StatCard label="Campaign emails sent today" value={data.campaignSentToday} hint="Promotional sends since midnight in Johannesburg." />
+        <StatCard label="Quotes waiting to send" value={data.quotesRequested} hint="Prepared quotations stay in review until someone sends them." />
         <StatCard label="Interested or responded" value={data.respondedLeads} hint="Responded, qualified, quoting, negotiating, or won." />
-        <StatCard label="Quotes requested" value={data.quotesRequested} hint="Prospects currently at quote requested." />
-        <StatCard label="Active campaigns" value={data.activeCampaigns} hint="Campaigns with status Active." />
         <StatCard label="Mailbox" value={data.mailbox ? 1 : 0} hint={mailboxHint} />
-        <StatCard label="Store" value={store?.connected ? 1 : 0} hint={storeHint} />
-        <StatCard label="Short stock" value={shortStock} hint="Tracked products with nothing left after open quotations and open website orders." />
-        <StatCard label="Products without pictures" value={missingImages} hint="Active products that will publish without a new image update." />
+        <StatCard label="Urban Focus" value={store?.connected ? 1 : 0} hint={storeHint} />
       </div>
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <Panel className="p-5">
@@ -63,20 +51,8 @@ export default async function DashboardPage() {
           )}
         </Panel>
         <Panel className="p-5">
-          <h2 className="text-base font-semibold">Campaign performance</h2>
-          <p className="mt-1 text-xs text-muted">Prospect membership. Sent and reply counts live on the dashboard cards.</p>
-          {data.campaigns.length === 0 ? (
-            <p className="mt-4 text-sm text-muted">No campaigns yet.</p>
-          ) : (
-            <ul className="mt-4 divide-y divide-line">
-              {data.campaigns.map((campaign) => (
-                <li key={campaign.id} className="flex items-center justify-between py-3 text-sm">
-                  <Link href={`/campaigns/${campaign.id}`} className="font-medium hover:underline">{campaign.name}</Link>
-                  <span className="text-muted">{CAMPAIGN_STATUS_LABELS[campaign.status]} · {campaign._count.prospects} prospects · {data.deliveryByCampaign[campaign.id]?.sent ?? 0} sent · {data.deliveryByCampaign[campaign.id]?.replies ?? 0} replies</span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <h2 className="text-base font-semibold">Quotations</h2>
+          <p className="mt-3 text-sm text-muted">Each RFQ is matched to Urban Focus. Missing products are researched online. A complete quotation stays in review until you send it.</p>
         </Panel>
       </div>
       <Panel className="mt-4 p-5">

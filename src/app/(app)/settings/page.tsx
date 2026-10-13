@@ -52,11 +52,11 @@ export default async function SettingsPage({
         <QuoteSettingsForm settings={quoteSettings} canManage={session.role === "OWNER" || session.role === "ADMIN"} />
       </Panel>
       <Panel className="p-5">
-        <h2 className="font-semibold">Store integration</h2>
-        <p className="mt-1 mb-4 text-sm text-muted">The website catalogue is the baseline. A matching product is updated. A new website product is created only after the duplicate check, price, content, and image rules pass. Supplier cost stays off the website.</p>
+        <h2 className="font-semibold">Urban Focus</h2>
+        <p className="mt-1 mb-4 text-sm text-muted">Product search uses this API. OutreachHub does not keep its own product catalogue, and it does not manage supplier feeds.</p>
         <p className="mb-3 text-sm">Connection status: {store?.status ?? "Not connected"}</p>
         {store?.lastError ? <p className="mb-3 text-sm text-red-700">Last error: {store.lastError}</p> : null}
-        <p className="mb-3 text-sm text-muted">Last successful sync: {store?.lastSyncAt ? formatDateTime(store.lastSyncAt) : "None yet"}</p>
+        <p className="mb-3 text-sm text-muted">Last store contact: {store?.lastSyncAt ? formatDateTime(store.lastSyncAt) : "None yet"}</p>
         <StoreConnectionForm
           storeName={store?.storeName ?? ""}
           storeUrl={store?.storeUrl ?? ""}
@@ -70,8 +70,6 @@ export default async function SettingsPage({
         />
       </Panel>
       <Panel className="p-5 text-sm">
-        <Link className="text-accent" href="/catalogue">Catalogue reconciliation</Link>
-        <span className="mx-2 text-muted">·</span>
         <Link className="text-accent" href="/settings/mailboxes">Mailboxes</Link>
         <span className="mx-2 text-muted">·</span>
         <Link className="text-accent" href="/settings/suppression">Suppression list</Link>

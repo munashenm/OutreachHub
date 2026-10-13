@@ -11,20 +11,17 @@ import {
   matchesKnownSupplier,
   matchRfqLine,
   priceQuotation,
-  type CatalogueHit,
   type InboundKind,
-  type PriceDecision,
 } from "../lib/automation";
-import { nameKey } from "../lib/automation";
-import { barcodeKey, brandModelKey, mpnKey, skuKey } from "../lib/catalogue-reconcile";
 import { getDb, isUniqueViolation } from "../lib/db";
 import { AppError } from "../lib/errors";
-import { classFromScorecard, SCORECARD_FIELD_SELECT, supplierClassRank } from "../lib/supplier-scorecard";
 import { recordActivity } from "./activity-service";
 import { assistProductSelection, selectionIsNeeded } from "../lib/ai/product-evidence";
 import { sendQuote } from "./quote-service";
 import { sendCustomerResponse } from "./reply-service";
-import { catalogueCommercialState, extractProductRequirements, planSourcing, requirementAwaitingQuantity, requirementSummary, type OutstandingItem, type ProductRequirement, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
+import { extractProductRequirements, planSourcing, requirementAwaitingQuantity, requirementSummary, type OutstandingItem, type ProductRequirement, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
+import { parseUrbanFocusSearch, relevantStoreProducts, urbanFocusCandidate, urbanFocusSearchQueries, urbanFocusSupplies } from "../lib/urban-focus-search";
+import { loadStoreProvider } from "./store/load";
 import { sourceExternalForRequirements } from "./external-sourcing-service";
 import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp, unpricedCatalogueNote } from "./sales-response-service";
 import { analyseRfqDocuments, analysisTextForRfq, listTenderAnalyses, responseModeForRfq, saveAnalysisMatches } from "./document-analysis-service";
@@ -81,7 +78,7 @@ export async function processInboundAutomation() {
 
 export async function getAutomationReport(workspaceId: string) {
   const db = getDb();
-  const [mailbox, inbound, rfqs, acknowledgements, suppliers, products, store, scans] = await Promise.all([
+  const [mailbox, inbound, rfqs, acknowledgements, store] = await Promise.all([
     db.mailbox.findFirst({
       where: { workspaceId, provider: "GOOGLE" },
       select: { email: true, lastInboundSyncAt: true, lastError: true },
@@ -89,25 +86,13 @@ export async function getAutomationReport(workspaceId: string) {
     db.message.count({ where: { workspaceId, direction: "INBOUND" } }),
     db.rfq.groupBy({ by: ["status"], where: { workspaceId }, _count: { _all: true } }),
     db.rfq.count({ where: { workspaceId, acknowledgementSentAt: { not: null } } }),
-    db.supplier.findMany({
-      where: { workspaceId },
-      select: { id: true, name: true, lastStockSyncAt: true, lastPriceSyncAt: true, lastCatalogueSyncAt: true, lastStockSyncError: true, feedEnabled: true },
-    }),
-    db.product.groupBy({ by: ["reviewStatus"], where: { workspaceId }, _count: { _all: true } }),
     db.workspace.findFirst({
       where: { id: workspaceId },
-      select: { storeLastSyncAt: true, storeLastError: true },
-    }),
-    db.catalogueAudit.findMany({
-      where: { workspaceId },
-      orderBy: { createdAt: "desc" },
-      take: 8,
-      select: { id: true, action: true, summary: true, createdAt: true },
+      select: { storeLastError: true },
     }),
   ]);
   const statusCount = (status: string) => rfqs.find((row) => row.status === status)?._count._all ?? 0;
-  const reviewCount = (status: string) => products.find((row) => row.reviewStatus === status)?._count._all ?? 0;
-  return { mailbox, inbound, acknowledgements, suppliers, store, scans, statusCount, reviewCount, needsReplyReview: statusCount("NEGOTIATION") + statusCount("REVIEWING") };
+  return { mailbox, inbound, acknowledgements, store, statusCount, needsReplyReview: statusCount("NEGOTIATION") + statusCount("REVIEWING") };
 }
 
 async function processInboundMessage(messageId: string) {
@@ -427,7 +412,7 @@ export async function findDocumentProducts(workspaceId: string, rfqId: string) {
         .sort((left, right) => matchRank(left.result.match) - matchRank(right.result.match));
       const best = ranked[0];
       if (!best) {
-        matches.push({ lineNumber: item.lineNumber, match: "NO MATCH", explanation: "No catalogue or supplier product meets this line.", productId: null, productName: "", sku: "", sourceKind: "", sourceName: "", sourceUrl: "", observedPriceCents: null, vatIncluded: false, availability: "", observedAt, pricedFromSupplier: false, ...UNPRICED_LINE });
+        matches.push({ lineNumber: item.lineNumber, match: "NO MATCH", explanation: "No Urban Focus product meets this line.", productId: null, productName: "", sku: "", sourceKind: "", sourceName: "", sourceUrl: "", observedPriceCents: null, vatIncluded: false, availability: "", observedAt, pricedFromSupplier: false, ...UNPRICED_LINE });
         continue;
       }
       const supplierPriced = best.candidate.sourceKind !== "EXTERNAL_SOURCE" && (best.candidate.costExVatCents ?? 0) > 0 && best.candidate.fresh;
@@ -552,9 +537,11 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   const requirementsHash = createHash("sha256").update(requirements.map((requirement) => requirement.requestedText).join("\n")).digest("hex").slice(0, 16);
   await db.rfq.update({ where: { id: rfq.id }, data: { status: "MATCHING", strictness, requirementsHash } });
   await recordRfqEvent(workspace.id, rfq.id, "REQUIREMENTS_PARSED", "MATCHING", strictness || "No structured requirement.");
+  const suppliedByUrbanFocus = (requirement: ProductRequirement) => urbanFocusSupplies(requirement, pools.catalogue);
+  const catalogueCoversRequest = requirements.length > 0 && requirements.every(suppliedByUrbanFocus);
   let searchedOnline = false;
   const retrieved = [...pools.catalogue, ...pools.supplierFeeds, ...pools.supplierApis, ...pools.external];
-  if (selectionIsNeeded(requirements, retrieved)) {
+  if (!catalogueCoversRequest && selectionIsNeeded(requirements, retrieved)) {
     const unmatchedRequirements = [...requirements];
     const assisted = await assistProductSelection({
       requirements,
@@ -566,7 +553,7 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
           return name.length >= 4 && query.toLowerCase().includes(name);
         });
         const requirement = index >= 0 ? unmatchedRequirements.splice(index, 1)[0] : unmatchedRequirements.shift();
-        if (!requirement) return [];
+        if (!requirement || urbanFocusSupplies(requirement, pools.catalogue)) return [];
         const live = await sourceExternalForRequirements(workspace.id, [requirement], query);
         return live.candidates;
       },
@@ -599,6 +586,7 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     } else if (plan.kind === "SOURCING") {
       pending = requirements.filter((requirement) => requirement.quantity != null);
     }
+    pending = pending.filter((requirement) => !urbanFocusSupplies(requirement, pools.catalogue));
     if (pending.length > 0) {
       const live = await sourceExternalForRequirements(workspace.id, pending.slice(0, 4));
       if (live.candidates.length > 0) {
@@ -641,7 +629,7 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
             sourceKind: "URBAN_FOCUS_CATALOGUE",
             matchGrade: chosen.method,
             matchStatus: "MATCHED",
-            matchNote: "Website catalogue. No supplier cost is on file.",
+            matchNote: "Urban Focus catalogue. No verified cost was returned with the product.",
             costStatus: "",
             productId: null,
             stockNote: chosen.stockQty == null ? "" : `${chosen.stockQty} on the website`,
@@ -701,15 +689,20 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   }
   for (const [index, option] of rankedOptions.entries()) {
     const tier = index === 0 ? "Value" : "Performance";
+    const pictured = [...pools.catalogue, ...pools.supplierFeeds, ...pools.supplierApis, ...pools.external].find((candidate) => candidate.name === option.name && candidate.sourceKind === option.sourceKind);
     await db.quoteLine.create({
       data: {
         workspaceId: workspace.id,
         quoteId: draft.id,
         productId: option.productId,
         description: alternatives ? `OPTION ${index + 1} – ${tier}: ${option.name}` : option.name,
+        sku: pictured?.sku ?? "",
+        modelName: pictured?.model ?? "",
+        manufacturerPartNumber: pictured?.mpn ?? "",
         quantity: new Prisma.Decimal(option.quantity.toFixed(2)),
         unitPriceCents: option.unitPriceCents,
         specifications: option.specifications,
+        imageUrls: pictured?.imageUrls ?? [],
         sourceKind: option.sourceKind,
         sourceUrl: option.sourceUrl,
         sourceCheckedAt: option.checkedAt ? new Date(option.checkedAt) : null,
@@ -803,213 +796,12 @@ function storedAnalysis(value: unknown) {
 
 export async function sourcingPools(workspaceId: string, requirements: ProductRequirement[] = []): Promise<SourcingPools> {
   const db = getDb();
-  const now = Date.now();
-  const freshAfter = new Date(now - 24 * 60 * 60 * 1000);
-  const identity = [...new Set(requirements.flatMap((requirement) => [requirement.sku, requirement.mpn, requirement.model].map((value) => value.trim()).filter((value) => value.length >= 3)))].slice(0, 8);
-  const productSelect = { id: true, sku: true, name: true, brand: true, manufacturerPartNumber: true, specifications: true, stockOnHand: true, unitPriceCents: true } as const;
-  const identityWhere = identity.length === 0 ? null : {
-    workspaceId,
-    active: true,
-    OR: identity.flatMap((token) => [
-      { sku: { contains: token, mode: "insensitive" as const } },
-      { name: { contains: token, mode: "insensitive" as const } },
-      { manufacturerPartNumber: { contains: token, mode: "insensitive" as const } },
-    ]),
-  };
-  let products = await db.product.findMany({
-    where: identityWhere ?? { workspaceId, active: true },
-    orderBy: { stockOnHand: "desc" },
-    take: identity.length > 0 ? 80 : 400,
-    select: productSelect,
-  });
-  if (identity.length > 0 && products.length === 0) {
-    products = await db.product.findMany({
-      where: { workspaceId, active: true },
-      orderBy: { stockOnHand: "desc" },
-      take: 400,
-      select: productSelect,
-    });
-  }
-  const productIds = products.map((product) => product.id);
-  const [offers, feedItems, external] = await Promise.all([
-    db.supplierPrice.findMany({ where: { workspaceId, productId: { in: productIds.length > 0 ? productIds : ["__none__"] } }, include: { supplier: { select: { name: true, markupPercent: true, authType: true, priceSyncIntervalMinutes: true, scorecard: { select: SCORECARD_FIELD_SELECT } } } } }),
-    db.supplierFeedItem.findMany({
-      where: identity.length === 0 ? { workspaceId } : {
-        workspaceId,
-        OR: identity.flatMap((token) => [
-          { supplierSku: { contains: token, mode: "insensitive" as const } },
-          { name: { contains: token, mode: "insensitive" as const } },
-          { manufacturerPartNumber: { contains: token, mode: "insensitive" as const } },
-        ]),
-      },
-      take: identity.length > 0 ? 200 : 400,
-      include: { supplier: { select: { name: true, markupPercent: true, authType: true, priceSyncIntervalMinutes: true, leadTimeDays: true, scorecard: { select: SCORECARD_FIELD_SELECT } } } },
-    }),
+  const now = new Date();
+  const freshAfter = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const [external, catalogue] = await Promise.all([
     db.externalSourceOffer.findMany({ where: { workspaceId, checkedAt: { gte: freshAfter }, sourceUrl: { not: "" } }, take: 100, orderBy: { checkedAt: "desc" } }),
+    urbanFocusCatalogue(workspaceId, requirements, now),
   ]);
-  const bestOffer = new Map<string, (typeof offers)[number]>();
-  for (const offer of offers) {
-    if (!offer.costKnown || offer.costCents <= 0 || classFromScorecard(offer.supplier.scorecard) === "REJECT") continue;
-    const current = bestOffer.get(offer.productId);
-    const rank = current ? supplierClassRank(classFromScorecard(offer.supplier.scorecard)) - supplierClassRank(classFromScorecard(current.supplier.scorecard)) : -1;
-    if (!current || rank < 0 || (rank === 0 && offer.costCents < current.costCents)) bestOffer.set(offer.productId, offer);
-  }
-  const catalogue: SourcingCandidate[] = products.map((product) => {
-    const offer = bestOffer.get(product.id);
-    const commercial = catalogueCommercialState({
-      stockOnHand: product.stockOnHand,
-      listedPriceCents: product.unitPriceCents,
-      costCents: offer?.costCents ?? null,
-      costKnown: offer?.costKnown ?? false,
-      costUpdatedAt: offer?.updatedAt ?? null,
-      nowMs: now,
-    });
-    return {
-      sourceKind: "URBAN_FOCUS_CATALOGUE",
-      sourceName: "Urban Focus",
-      sourceUrl: "",
-      sourceType: "INTERNAL",
-      productId: product.id,
-      name: product.name,
-      brand: product.brand,
-      model: product.manufacturerPartNumber,
-      sku: product.sku,
-      mpn: product.manufacturerPartNumber,
-      specifications: product.specifications || product.name,
-      costExVatCents: commercial.costExVatCents,
-      listedPriceCents: commercial.listedPriceCents,
-      vatIncluded: false,
-      shippingCents: 0,
-      procurementCents: 0,
-      importCents: 0,
-      riskPercent: 0,
-      markupPercent: offer?.supplier.markupPercent ?? 0,
-      stockQty: commercial.stockQty,
-      stockKnown: commercial.stockKnown,
-      fresh: commercial.fresh,
-      checkedAt: offer?.updatedAt.toISOString() ?? null,
-      reputable: true,
-      supplierClass: offer ? classFromScorecard(offer.supplier.scorecard) : undefined,
-    };
-  });
-  const supplierFeeds: SourcingCandidate[] = [];
-  const supplierApis: SourcingCandidate[] = [];
-  for (const offer of offers) {
-    const fresh = now - offer.updatedAt.getTime() <= offer.supplier.priceSyncIntervalMinutes * 60 * 1000;
-    const row: SourcingCandidate = {
-      sourceKind: offer.supplier.authType === "NONE" ? "SUPPLIER_FEED" : "SUPPLIER_API",
-      sourceName: offer.supplier.name,
-      sourceUrl: "",
-      sourceType: "DISTRIBUTOR",
-      productId: offer.productId,
-      name: offer.offerName || offer.supplierSku,
-      brand: offer.brand,
-      model: offer.manufacturerPartNumber,
-      sku: offer.supplierSku,
-      mpn: offer.manufacturerPartNumber,
-      specifications: offer.specifications || offer.description || offer.offerName,
-      costExVatCents: offer.costKnown ? offer.costCents : null,
-      listedPriceCents: null,
-      vatIncluded: false,
-      shippingCents: 0,
-      procurementCents: 0,
-      importCents: 0,
-      riskPercent: 0,
-      markupPercent: offer.supplier.markupPercent,
-      stockQty: offer.stockQty,
-      stockKnown: offer.stockKnown,
-      fresh,
-      checkedAt: offer.updatedAt.toISOString(),
-      reputable: true,
-      supplierClass: classFromScorecard(offer.supplier.scorecard),
-    };
-    if (row.sourceKind === "SUPPLIER_API") supplierApis.push(row);
-    else supplierFeeds.push(row);
-  }
-  const linked = new Set(offers.map((offer) => `${offer.supplierId}:${offer.productId}`));
-  for (const item of feedItems) {
-    if (item.productId && linked.has(`${item.supplierId}:${item.productId}`)) continue;
-    const fresh = now - item.updatedAt.getTime() <= item.supplier.priceSyncIntervalMinutes * 60 * 1000;
-    const row: SourcingCandidate = {
-      sourceKind: item.supplier.authType === "NONE" ? "SUPPLIER_FEED" : "SUPPLIER_API",
-      sourceName: item.supplier.name,
-      sourceUrl: "",
-      sourceType: "DISTRIBUTOR",
-      productId: item.productId,
-      name: item.name || item.supplierSku,
-      brand: item.brand,
-      model: item.manufacturerPartNumber,
-      sku: item.supplierSku,
-      mpn: item.manufacturerPartNumber,
-      specifications: item.specifications || item.description || item.name,
-      costExVatCents: item.costKnown ? item.costCents : null,
-      listedPriceCents: null,
-      vatIncluded: false,
-      shippingCents: 0,
-      procurementCents: 0,
-      importCents: 0,
-      riskPercent: 0,
-      markupPercent: item.supplier.markupPercent,
-      stockQty: item.stockKnown ? item.stockQty : null,
-      stockKnown: item.stockKnown,
-      fresh,
-      checkedAt: item.updatedAt.toISOString(),
-      reputable: true,
-      supplierClass: classFromScorecard(item.supplier.scorecard),
-    };
-    if (row.sourceKind === "SUPPLIER_API") supplierApis.push(row);
-    else supplierFeeds.push(row);
-  }
-  const storeItems = await db.storeCatalogueItem.findMany({
-    where: { workspaceId, published: true },
-    select: { productId: true, sku: true, name: true, brand: true, manufacturerPartNumber: true, specifications: true, description: true, stockQuantity: true, unitPriceCents: true },
-  });
-  const seenSkus = new Set(catalogue.map((item) => item.sku.toLowerCase()).filter(Boolean));
-  const costBySku = new Map<string, { costCents: number; markupPercent: number; fresh: boolean }>();
-  for (const offer of offers) {
-    if (!offer.costKnown || offer.costCents <= 0 || !offer.supplierSku) continue;
-    const fresh = now - offer.updatedAt.getTime() <= offer.supplier.priceSyncIntervalMinutes * 60 * 1000;
-    const key = offer.supplierSku.toLowerCase();
-    const current = costBySku.get(key);
-    if (!current || (fresh && !current.fresh) || offer.costCents < current.costCents) costBySku.set(key, { costCents: offer.costCents, markupPercent: offer.supplier.markupPercent, fresh });
-  }
-  for (const item of storeItems) {
-    const sku = item.sku.trim();
-    if (!sku) continue;
-    const existing = catalogue.find((entry) => entry.sku.toLowerCase() === sku.toLowerCase());
-    if (existing) {
-      if ((existing.listedPriceCents ?? 0) <= 0 && item.unitPriceCents > 0) existing.listedPriceCents = item.unitPriceCents;
-      continue;
-    }
-    seenSkus.add(sku.toLowerCase());
-    const cost = costBySku.get(sku.toLowerCase());
-    catalogue.push({
-      sourceKind: "URBAN_FOCUS_CATALOGUE",
-      sourceName: "Urban Focus",
-      sourceUrl: "",
-      sourceType: "INTERNAL",
-      productId: item.productId,
-      name: item.name,
-      brand: item.brand,
-      model: item.manufacturerPartNumber,
-      sku,
-      mpn: item.manufacturerPartNumber,
-      specifications: [item.specifications, item.description, item.name].filter(Boolean).join("\n"),
-      costExVatCents: cost?.fresh ? cost.costCents : null,
-      listedPriceCents: item.unitPriceCents > 0 ? item.unitPriceCents : null,
-      vatIncluded: false,
-      shippingCents: 0,
-      procurementCents: 0,
-      importCents: 0,
-      riskPercent: 0,
-      markupPercent: cost?.markupPercent ?? 0,
-      stockQty: item.stockQuantity,
-      stockKnown: true,
-      fresh: item.stockQuantity > 0,
-      checkedAt: null,
-      reputable: true,
-    });
-  }
   const externalCandidates: SourcingCandidate[] = external.map((offer) => ({
     sourceKind: "EXTERNAL_SOURCE",
     sourceName: offer.sourceName,
@@ -1036,8 +828,33 @@ export async function sourcingPools(workspaceId: string, requirements: ProductRe
     checkedAt: offer.checkedAt.toISOString(),
     reputable: offer.sourceType !== "OTHER",
   }));
-  return { catalogue, supplierFeeds, supplierApis, external: externalCandidates };
+  return { catalogue, supplierFeeds: [], supplierApis: [], external: externalCandidates };
 }
+
+async function urbanFocusCatalogue(workspaceId: string, requirements: ProductRequirement[], now: Date): Promise<SourcingCandidate[]> {
+  const loaded = await loadStoreProvider(workspaceId);
+  if (!loaded) return [];
+  const seen = new Set<string>();
+  const candidates: SourcingCandidate[] = [];
+  for (const query of urbanFocusSearchQueries(requirements)) {
+    let body: unknown;
+    try {
+      body = await loaded.provider.searchCatalogue(query);
+    } catch {
+      continue;
+    }
+    if (!body) continue;
+    const parsed = parseUrbanFocusSearch(body);
+    if ("error" in parsed) continue;
+    for (const product of relevantStoreProducts(parsed, query)) {
+      if (!product.published || seen.has(product.storeProductId)) continue;
+      seen.add(product.storeProductId);
+      candidates.push(urbanFocusCandidate(product, now.toISOString()));
+    }
+  }
+  return candidates.slice(0, 80);
+}
+
 
 async function rememberAlternativeQuote(rfq: { id: string; lines: { id: string }[]; quotes: { id: string; status: string }[] }, matches: { productId: string | null; name: string; sku: string; unitPriceCents: number | null; method: string }[], workspaceId: string, quantity: number, confidence: number) {
   const db = getDb();
@@ -1170,79 +987,6 @@ function processingStore(workspaceId: string, messageId: string): ProcessingStor
       return updated.count === 1;
     },
   };
-}
-
-function reviewNote(decisions: PriceDecision[]) {
-  if (decisions.includes("MARGIN_WARNING")) return "The margin is below the minimum, so the quotation was not created.";
-  if (decisions.includes("STALE")) return "The supplier price or stock is not fresh, so the quotation was not created.";
-  if (decisions.includes("STOCK_REVIEW")) return "Stock cannot cover the requested quantity, so the quotation was not created.";
-  if (decisions.includes("PRICE_REVIEW")) return "The supplier price changed enough to need a review.";
-  return "The quotation needs a review.";
-}
-
-async function catalogueHits(workspaceId: string): Promise<CatalogueHit[]> {
-  const db = getDb();
-  const scan = await db.storeCatalogueScan.findFirst({
-    where: { workspaceId, status: "COMPLETE" },
-    orderBy: { finishedAt: "desc" },
-    select: { id: true },
-  });
-  const items = scan
-    ? await db.storeCatalogueItem.findMany({
-      where: { workspaceId, scanId: scan.id },
-      select: { storeProductId: true, sku: true, skuKey: true, mpnKey: true, barcodeKey: true, brandModelKey: true, name: true, productId: true, specifications: true },
-    })
-    : [];
-  const products = await db.product.findMany({
-    where: { workspaceId },
-    select: { id: true, sku: true, manufacturerPartNumber: true, barcode: true, brand: true, name: true, storeProductId: true, specifications: true },
-  });
-  const productBySku = new Map(products.map((product) => [skuKey(product.sku), product.id]));
-  const specificationsByProduct = new Map(products.map((product) => [product.id, product.specifications]));
-  const hits: CatalogueHit[] = items.map((item) => {
-    const productId = item.productId ?? productBySku.get(item.skuKey) ?? null;
-    return {
-      id: item.storeProductId,
-      productId,
-      sku: item.sku,
-      skuKey: item.skuKey,
-      mpnKey: item.mpnKey,
-      barcodeKey: item.barcodeKey,
-      brandModelKey: item.brandModelKey,
-      nameKey: nameKey(item.name),
-      name: item.name,
-      specifications: item.specifications || (productId ? specificationsByProduct.get(productId) ?? "" : ""),
-    };
-  });
-  for (const product of products) {
-    if (hits.some((hit) => hit.productId === product.id)) continue;
-    hits.push({
-      id: product.storeProductId ?? product.id,
-      productId: product.id,
-      sku: product.sku,
-      skuKey: skuKey(product.sku),
-      mpnKey: mpnKey(product.manufacturerPartNumber),
-      barcodeKey: barcodeKey(product.barcode),
-      brandModelKey: brandModelKey(product.brand, product.manufacturerPartNumber),
-      nameKey: nameKey(product.name),
-      name: product.name,
-      specifications: product.specifications,
-    });
-  }
-  return hits;
-}
-
-async function confirmedSupplierMap(workspaceId: string) {
-  const links = await getDb().supplierPrice.findMany({
-    where: { workspaceId, product: { storeProductId: { not: null } } },
-    select: { supplierSku: true, product: { select: { storeProductId: true, id: true } } },
-  });
-  const confirmed = new Map<string, string>();
-  for (const link of links) {
-    const key = skuKey(link.supplierSku);
-    if (key && link.product.storeProductId && !confirmed.has(key)) confirmed.set(key, link.product.storeProductId);
-  }
-  return confirmed;
 }
 
 async function rfqForThread(workspaceId: string, threadId: string | null, messageId: string) {
