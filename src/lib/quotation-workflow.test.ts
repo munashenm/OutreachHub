@@ -69,7 +69,7 @@ test("ordinary wording keeps both quantities and does not treat a charger as a l
   assert.equal(supply?.ramGb, null);
   const stored = extractRfqRequest(LAPTOP_RFQ);
   assert.equal(stored.lines.length, 2);
-  assert.deepEqual(stored.lines.map((line) => line.quantity).sort((left, right) => left - right), [10, 25]);
+  assert.deepEqual(stored.lines.map((line) => line.quantity).sort((left, right) => (left ?? 0) - (right ?? 0)), [10, 25]);
 });
 
 test("a numbered list is not the quantity, and a table keeps each quantity", () => {

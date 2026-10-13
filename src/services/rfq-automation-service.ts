@@ -556,11 +556,13 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
   }
   let plan = planSourcing({ requirements, pools, ...margins });
   if (!searchedOnline) {
-    const pending = plan.kind === "QUOTE"
-      ? requirements.filter((requirement) => plan.outstanding.some((item) => item.requestedText === requirement.requestedText))
-      : plan.kind === "SOURCING"
-        ? requirements.filter((requirement) => requirement.quantity != null)
-        : [];
+    let pending: ProductRequirement[] = [];
+    if (plan.kind === "QUOTE") {
+      const outstanding = plan.outstanding;
+      pending = requirements.filter((requirement) => outstanding.some((item) => item.requestedText === requirement.requestedText));
+    } else if (plan.kind === "SOURCING") {
+      pending = requirements.filter((requirement) => requirement.quantity != null);
+    }
     if (pending.length > 0) {
       const live = await sourceExternalForRequirements(workspace.id, pending.slice(0, 4));
       if (live.candidates.length > 0) {
@@ -624,10 +626,6 @@ async function quoteRfq(rfqId: string, workspace: { id: string; minimumMarginPer
     await db.rfq.update({ where: { id: rfq.id }, data: { status: "SOURCING", automationNote: plan.note, quoteBlockedReason: plan.note } });
     await recordRfqEvent(workspace.id, rfq.id, "SOURCING_STARTED", "SOURCING", plan.note);
     return respond({ planKind: "SOURCING", planMessage: plan.message, salesAction: sales?.action === "EXTERNAL_TASK" ? "EXTERNAL_TASK" : "" });
-  }
-  if (plan.kind === "STAFF_REVIEW") {
-    await db.rfq.update({ where: { id: rfq.id }, data: { status: "REVIEWING", automationNote: plan.note } });
-    return respond({ planKind: "STAFF_REVIEW" });
   }
   const rankedOptions = plan.options;
   const recommended = rankedOptions[0];

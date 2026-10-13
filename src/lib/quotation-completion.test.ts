@@ -7,7 +7,7 @@ import { analyseDocumentText } from "./document-analysis";
 import { readDocumentFile } from "./document-files";
 import { withClientSignature } from "./email-signature";
 import { autoRfqRepliesEnabled, determineInitialResponse, memoryProcessingStore, sendResponseOnce } from "./inbound-response";
-import { buildQuotationDocument, defaultQuoteCompanySettings, quoteCoverEmail, quotationTotals } from "./quotation-document";
+import { buildQuotationDocument, defaultQuoteCompanySettings, quoteCoverEmail, quotationTotals, type QuotationLineInput } from "./quotation-document";
 import { renderQuotationPdf } from "./quotation-pdf";
 import { extractProductRequirements, planSourcing, type SourcingCandidate, type SourcingPools } from "./sourcing";
 
@@ -204,7 +204,7 @@ Also quote 2 barcode scanners.`;
   assert.equal(plan.outstanding[0]?.quantity, 2);
   assert.match(plan.outstanding[0]?.label ?? "", /scanner/i);
 
-  const lines = plan.options.map((option) => ({
+  const lines: QuotationLineInput[] = plan.options.map((option) => ({
     description: option.name,
     quantity: option.quantity,
     unitPriceCents: option.unitPriceCents,
