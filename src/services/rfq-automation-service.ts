@@ -20,7 +20,7 @@ import { assistProductSelection, selectionIsNeeded } from "../lib/ai/product-evi
 import { sendQuote } from "./quote-service";
 import { sendCustomerResponse } from "./reply-service";
 import { extractProductRequirements, planSourcing, requirementAwaitingQuantity, requirementSummary, type OutstandingItem, type ProductRequirement, type SourcingCandidate, type SourcingPools } from "../lib/sourcing";
-import { parseUrbanFocusSearch, relevantStoreProducts, UrbanFocusCatalogueError, urbanFocusCandidate, urbanFocusCatalogueHold, urbanFocusSearchQueries, urbanFocusSupplies } from "../lib/urban-focus-search";
+import { relevantStoreProducts, UrbanFocusCatalogueError, urbanFocusCandidate, urbanFocusSearchQueries, urbanFocusSupplies, readStoreCatalogueQuery } from "../lib/urban-focus-search";
 import { loadStoreProvider } from "./store/load";
 import { sourceExternalForRequirements } from "./external-sourcing-service";
 import { enquiryFromRequest, openSourcingTask, recordFunnel, recordReplyStage, responseForRequirement, stopQuoteFollowUp, unpricedCatalogueNote } from "./sales-response-service";
@@ -847,17 +847,9 @@ async function urbanFocusCatalogue(workspaceId: string, requirements: ProductReq
   const seen = new Set<string>();
   const candidates: SourcingCandidate[] = [];
   for (const query of queries) {
-    let body: unknown;
-    try {
-      body = await loaded.provider.searchCatalogue(query);
-    } catch (error) {
-      throw new UrbanFocusCatalogueError(urbanFocusCatalogueHold({ error }) ?? "The Urban Focus catalogue could not be read. The request was held and was not quoted from another source.");
-    }
-    const held = urbanFocusCatalogueHold({ body });
-    if (held) throw new UrbanFocusCatalogueError(held);
-    const parsed = parseUrbanFocusSearch(body);
-    if ("error" in parsed) throw new UrbanFocusCatalogueError("The Urban Focus catalogue returned a response that could not be read. The request was held and was not quoted from another source.");
-    for (const product of relevantStoreProducts(parsed, query)) {
+    const read = await readStoreCatalogueQuery(() => loaded.provider.searchCatalogue(query));
+    if (read.hold !== null) throw new UrbanFocusCatalogueError(read.hold);
+    for (const product of relevantStoreProducts(read.products, query)) {
       if (!product.published || seen.has(product.storeProductId)) continue;
       seen.add(product.storeProductId);
       candidates.push(urbanFocusCandidate(product, now.toISOString()));

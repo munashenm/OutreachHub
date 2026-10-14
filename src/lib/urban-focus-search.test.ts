@@ -1,7 +1,84 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { determineInitialResponse, memoryProcessingStore, sendResponseOnce } from "./inbound-response";
 import { emptyRequirement } from "./sourcing";
-import { parseUrbanFocusSearch, relevantStoreProducts, urbanFocusCandidate, urbanFocusCatalogueHold, urbanFocusSearchQueries, urbanFocusSupplies } from "./urban-focus-search";
+import { createUrbanFocusStore } from "../services/store/urban-focus-store";
+import { parseUrbanFocusSearch, readStoreCatalogueQuery, relevantStoreProducts, urbanFocusCandidate, urbanFocusCatalogueHold, urbanFocusSearchQueries, urbanFocusSupplies } from "./urban-focus-search";
+
+const emptyCatalogue = { page: 1, perPage: 40, total: 0, lastPage: 1, products: [] };
+
+function catalogueStore(fetchImpl: typeof fetch) {
+  const original = globalThis.fetch;
+  globalThis.fetch = fetchImpl;
+  const store = createUrbanFocusStore({ apiBaseUrl: "https://www.urbanfocus.co.za/api/store/", token: "test-token" });
+  return {
+    store,
+    restore() {
+      globalThis.fetch = original;
+    },
+  };
+}
+
+function jsonResponse(status: number, body: string) {
+  return new Response(body, { status, headers: { "content-type": "application/json" } });
+}
+
+test("catalogue API failures stay in review and an empty catalogue can be sourced online", async () => {
+  const cases = [
+    { name: "401", fetchImpl: async () => jsonResponse(401, "{\"error\":\"Invalid API key.\"}") },
+    { name: "500", fetchImpl: async () => jsonResponse(500, "{\"error\":\"unavailable\"}") },
+    { name: "timeout", fetchImpl: async () => { throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }); } },
+    { name: "invalid-json", fetchImpl: async () => jsonResponse(200, "{") },
+    { name: "missing-body", fetchImpl: async () => jsonResponse(404, "") },
+  ];
+  for (const item of cases) {
+    const setup = catalogueStore(item.fetchImpl as typeof fetch);
+    let externalSearches = 0;
+    try {
+      const read = await readStoreCatalogueQuery(() => setup.store.searchCatalogue({ sku: "400702" }));
+      assert.equal(typeof read.hold, "string", item.name);
+      assert.match(read.hold ?? "", /held/);
+      assert.equal(read.products, null);
+      if (read.hold == null) externalSearches += 1;
+      const response = determineInitialResponse({
+        quotationRequest: true,
+        tenderPackage: false,
+        planKind: "STAFF_REVIEW",
+        planSend: false,
+        planMessage: "",
+        salesAction: "",
+        salesMessage: "",
+        catalogueProductNamed: false,
+        awaitingQuantity: false,
+        documentBlocksAutoSend: false,
+        notify: true,
+      });
+      const delivery = await sendResponseOnce({
+        gmailMessageId: `catalogue-${item.name}`,
+        threadId: "thread-catalogue",
+        response,
+        store: memoryProcessingStore(),
+        repliesEnabled: true,
+        send: async () => { throw new Error("Customer email must not be sent."); },
+      });
+      assert.equal(delivery.sent, false, item.name);
+      assert.equal(externalSearches, 0, item.name);
+    } finally {
+      setup.restore();
+    }
+  }
+  const setup = catalogueStore(async () => jsonResponse(200, JSON.stringify(emptyCatalogue)));
+  let externalSearches = 0;
+  try {
+    const read = await readStoreCatalogueQuery(() => setup.store.searchCatalogue({ sku: "missing-sku" }));
+    assert.equal(read.hold, null);
+    assert.deepEqual(read.products, []);
+    if (read.hold == null) externalSearches += 1;
+    assert.equal(externalSearches, 1);
+  } finally {
+    setup.restore();
+  }
+});
 
 test("a catalogue failure is held instead of being treated as no stock", () => {
   const rejected = urbanFocusCatalogueHold({ error: new Error("The store rejected the API key.") });

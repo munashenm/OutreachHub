@@ -46,6 +46,21 @@ export function urbanFocusCatalogueHold(input: { error?: unknown; body?: unknown
   return null;
 }
 
+/** Reads one catalogue search. A hold stops the quotation. An empty product list does not. */
+export async function readStoreCatalogueQuery(search: () => Promise<unknown>): Promise<{ hold: string; products: null } | { hold: null; products: ParsedStoreProduct[] }> {
+  let body: unknown;
+  try {
+    body = await search();
+  } catch (error) {
+    return { hold: urbanFocusCatalogueHold({ error }) ?? "The Urban Focus catalogue could not be read. The request was held and was not quoted from another source.", products: null };
+  }
+  const held = urbanFocusCatalogueHold({ body });
+  if (held) return { hold: held, products: null };
+  const parsed = parseUrbanFocusSearch(body);
+  if ("error" in parsed) return { hold: "The Urban Focus catalogue returned a response that could not be read. The request was held and was not quoted from another source.", products: null };
+  return { hold: null, products: parsed };
+}
+
 export function parseUrbanFocusSearch(body: unknown): ParsedStoreProduct[] | { error: string } {
   if (body && typeof body === "object" && !Array.isArray(body) && Array.isArray((body as { products?: unknown }).products) && !("page" in (body as object))) {
     const products = (body as { products: unknown[] }).products;

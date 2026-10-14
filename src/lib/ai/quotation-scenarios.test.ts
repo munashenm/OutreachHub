@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { analyzeInboundEmail } from "./rfq-analyzer";
 import { requirementsForSourcing } from "./rfq-requirements";
@@ -12,7 +13,8 @@ import { planSourcing, type SourcingCandidate, type SourcingPools } from "../sou
 
 const margins = { minimumMarginPercent: 20, autoQuoteMarginPercent: 20, autoSendMarginPercent: 25 };
 const now = new Date("2026-10-12T12:00:00.000Z");
-const LIVE_ADAPTER_URL = "https://www.incredible.co.za/lenovo-usb-c-65w-ac-adapter";
+const SAVED_ADAPTER_URL = "https://www.incredible.co.za/lenovo-usb-c-65w-ac-adapter";
+const SAVED_ADAPTER_PAGE = readFileSync(new URL("./fixtures/lenovo-65w-adapter.html", import.meta.url), "utf8");
 
 function modelJson(payload: unknown) {
   return new Response(JSON.stringify({ output: [{ content: [{ text: JSON.stringify(payload) }] }] }));
@@ -118,18 +120,15 @@ async function preparedPdf(lines: Array<{ description: string; quantity: number;
   return { document, text: `${raw}\n${decoded}` };
 }
 
-async function liveAdapter() {
-  const response = await fetch(LIVE_ADAPTER_URL, { headers: { accept: "text/html", "user-agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(20_000) });
-  assert.equal(response.ok, true);
-  const html = await response.text();
-  const observed = observeProductPage(html, LIVE_ADAPTER_URL);
+function savedAdapter() {
+  const observed = observeProductPage(SAVED_ADAPTER_PAGE, SAVED_ADAPTER_URL);
   assert.ok(observed.product, observed.reason);
   const product = observed.product;
   assert.equal(product.currency, "ZAR");
   assert.equal(product.listedPriceCents > 0, true);
   assert.match(product.name, /65W/i);
   assert.match(product.availability, /stock/i);
-  return candidateFromObservation(product, LIVE_ADAPTER_URL);
+  return candidateFromObservation(product, SAVED_ADAPTER_URL);
 }
 
 test("scenario A prices catalogue products from the OpenAI extraction", async () => {
@@ -190,9 +189,9 @@ test("scenario A prices catalogue products from the OpenAI extraction", async ()
   assert.equal(held.sent, false);
 });
 
-test("scenario B uses a live retailer page and does not invent its selling price", async () => {
+test("scenario B reads a saved retailer page and does not invent its selling price", async () => {
   const email = "Please quote 1 Lenovo USB-C 65W AC adapter.";
-  const live = await liveAdapter();
+  const live = savedAdapter();
   const seenQueries: string[] = [];
   const analysis = await analyzeInboundEmail({ subject: "RFQ", body: email }, {
     apiKey: "test-key",
@@ -221,7 +220,7 @@ test("scenario B uses a live retailer page and does not invent its selling price
   });
   assert.equal(assisted.ok, true);
   assert.deepEqual(seenQueries, ["Lenovo USB-C 65W AC adapter"]);
-  assert.equal(assisted.accepted[0]?.sourceUrl, LIVE_ADAPTER_URL);
+  assert.equal(assisted.accepted[0]?.sourceUrl, SAVED_ADAPTER_URL);
   assert.equal(assisted.accepted[0]?.listedPriceCents, live.listedPriceCents);
   assert.equal(assisted.accepted[0]?.vatKnown, false);
   assert.equal(assisted.accepted[0]?.name, live.name);
@@ -236,9 +235,9 @@ test("scenario B uses a live retailer page and does not invent its selling price
   assert.equal(invented.length, 0);
 });
 
-test("scenario C prices the stocked product and holds the live online product", async () => {
+test("scenario C prices the stocked product and holds the saved online product", async () => {
   const email = "Please quote 3 Lenovo ThinkPad E14 laptops with Core i5, 16GB RAM, 512GB SSD and Windows 11 Pro, and 1 Lenovo USB-C 65W AC adapter.";
-  const live = await liveAdapter();
+  const live = savedAdapter();
   const analysis = await analyzeInboundEmail({ subject: "RFQ", body: email }, {
     apiKey: "test-key",
     fetchImpl: async () => modelJson(analysisPayload([
